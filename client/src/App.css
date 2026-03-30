@@ -1,0 +1,160 @@
+.navbar-enter {
+  animation: navbarSlideIn 0.85s cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.logo-glow {
+  animation: logoPulse 4.5s ease-in-out infinite;
+}
+
+.nav-link {
+  position: relative;
+  overflow: hidden;
+}
+
+.nav-link::after {
+  content: '';
+  position: absolute;
+  left: 1rem;
+  bottom: 0.4rem;
+  width: calc(100% - 2rem);
+  height: 2px;
+  border-radius: 999px;
+  background: linear-gradient(90deg, rgba(252, 211, 77, 0), rgba(251, 146, 60, 0.95), rgba(251, 191, 36, 0));
+  transform: scaleX(0);
+  transform-origin: center;
+  transition: transform 0.3s ease;
+}
+
+.nav-link:hover::after {
+  transform: scaleX(1);
+}
+
+.subscribe-button {
+  position: relative;
+  overflow: hidden;
+}
+
+.subscribe-button::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(120deg, transparent 10%, rgba(255, 255, 255, 0.35) 45%, transparent 80%);
+  transform: translateX(-130%);
+  animation: buttonSweep 3.8s ease-in-out infinite;
+}
+
+.hero-panel,
+.content-panel {
+  background:
+    linear-gradient(180deg, rgba(15, 23, 42, 0.84), rgba(15, 23, 42, 0.58)),
+    radial-gradient(circle at top right, rgba(251, 146, 60, 0.14), transparent 30%);
+  backdrop-filter: blur(18px);
+}
+
+.auth-card,
+.signin-card {
+  background:
+    linear-gradient(180deg, rgba(15, 23, 42, 0.9), rgba(15, 23, 42, 0.7)),
+    radial-gradient(circle at top right, rgba(251, 191, 36, 0.12), transparent 34%);
+  box-shadow: 0 28px 80px rgba(15, 23, 42, 0.32);
+  backdrop-filter: blur(20px);
+}
+
+.signin-card {
+  background:
+    linear-gradient(180deg, rgba(30, 41, 59, 0.85), rgba(15, 23, 42, 0.78)),
+    radial-gradient(circle at top left, rgba(249, 115, 22, 0.14), transparent 36%);
+}
+
+.menu-panel {
+  background:
+    linear-gradient(180deg, rgba(15, 23, 42, 0.9), rgba(15, 23, 42, 0.72)),
+    radial-gradient(circle at top right, rgba(251, 191, 36, 0.1), transparent 34%);
+  backdrop-filter: blur(20px);
+}
+
+.theme-navbar,
+.theme-panel,
+.theme-menu-panel,
+.theme-menu-button,
+.theme-status-badge,
+.theme-input {
+  transition:
+    background-color 0.25s ease,
+    border-color 0.25s ease,
+    color 0.25s ease,
+    box-shadow 0.25s ease;
+}
+
+.light-theme .theme-navbar {
+  background: rgba(255, 255, 255, 0.82);
+  border-color: rgba(148, 163, 184, 0.28);
+}
+
+.light-theme .theme-menu-button,
+.light-theme .theme-status-badge,
+.light-theme .theme-input {
+  background: rgba(255, 255, 255, 0.84);
+  border-color: rgba(148, 163, 184, 0.26);
+  color: #0f172a;
+}
+
+.light-theme .theme-input::placeholder {
+  color: #64748b;
+}
+
+.menu-scrollbar {
+  scrollbar-width: thin;
+  scrollbar-color: rgba(251, 191, 36, 0.55) rgba(255, 255, 255, 0.08);
+}
+
+.menu-scrollbar::-webkit-scrollbar {
+  width: 8px;
+}
+
+.menu-scrollbar::-webkit-scrollbar-track {
+  background: rgba(255, 255, 255, 0.08);
+  border-radius: 999px;
+}
+
+.menu-scrollbar::-webkit-scrollbar-thumb {
+  background: linear-gradient(180deg, rgba(251, 191, 36, 0.7), rgba(249, 115, 22, 0.7));
+  border-radius: 999px;
+}
+
+@keyframes navbarSlideIn {
+  from {
+    opacity: 0;
+    transform: translateY(-24px);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes buttonSweep {
+  0%,
+  100% {
+    transform: translateX(-130%);
+  }
+
+  45%,
+  55% {
+    transform: translateX(130%);
+  }
+}
+
+@keyframes logoPulse {
+  0%,
+  100% {
+    transform: translateY(0);
+    filter: drop-shadow(0 0 0 rgba(251, 191, 36, 0));
+  }
+
+  50% {
+    transform: translateY(-1px);
+    filter: drop-shadow(0 0 16px rgba(251, 191, 36, 0.22));
+  }
+}
