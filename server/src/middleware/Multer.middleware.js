@@ -1,8 +1,8 @@
 import fs from "fs";
-import path from "path";
 import multer from "multer";
+import { fileURLToPath } from "url";
 
-const uploadDir = path.join(process.cwd(), "public", "temp");
+const uploadDir = fileURLToPath(new URL("../../public/temp/", import.meta.url));
 if (!fs.existsSync(uploadDir)) {
   fs.mkdirSync(uploadDir, { recursive: true });
 }
@@ -19,4 +19,3 @@ const storage = multer.diskStorage({
 export const upload = multer({
   storage,
 });
-

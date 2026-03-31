@@ -42,6 +42,15 @@ For winner payouts (RazorpayX):
 - Health endpoint: `/health`
 - Restart policy: always
 
+### Render-specific settings
+- Service type: `Web Service`
+- Root directory: `server`
+- Build command: `npm ci`
+- Start command: `npm start`
+- Health check path: `/health`
+- Environment: set secrets in Render dashboard, not in `.env`
+- MongoDB Atlas: allow Render to reach Atlas. If Atlas blocks the connection, add an allowed network entry for Render traffic (commonly `0.0.0.0/0` for hosted platforms unless you use a stricter network setup).
+
 ## 3. Frontend Deployment (Client)
 
 Project path: `client/`

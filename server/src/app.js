@@ -2,11 +2,13 @@ import express from 'express'
 import cors from 'cors'
 import cookieParser from 'cookie-parser'
 import { ApiResponse } from './utils/Apiresponse.js'
+import { fileURLToPath } from 'url'
 
 
 
 const app = express();
 const corsOrigin = String(process.env.CORS_ORIGIN || '').trim()
+const publicDir = fileURLToPath(new URL('../public/', import.meta.url))
 
 app.use(cors({
     origin: corsOrigin === "*" ? true : (corsOrigin || true),
@@ -16,7 +18,7 @@ app.use(cors({
 app.use(express.json({limit: "16kb"}))
 app.use(express.urlencoded({extended: true, limit: "16kb"}))
 // Serve static assets from the backend public folder
-app.use(express.static("public"))
+app.use(express.static(publicDir))
 app.use(cookieParser())
 
 import userRouter from './routes/User.routes.js'
