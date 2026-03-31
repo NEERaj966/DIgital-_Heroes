@@ -1,224 +1,406 @@
 import { randomUUID } from "node:crypto";
 
-const RAZORPAYX_BASE_URL = "https://api.razorpay.com/v1";
-const TERMINAL_PAYOUT_STATUSES = ["processed", "failed", "cancelled", "reversed", "rejected"];
-const IN_FLIGHT_PAYOUT_STATUSES = ["queued", "pending", "processing"];
-const DEFAULT_RAZORPAYX_TIMEOUT_MS = 15000;
+const STRIPE_API_BASE_URL = "https://api.stripe.com";
+const STRIPE_PAYOUTS_API_VERSION = "2026-03-25.preview";
+const DEFAULT_REQUEST_TIMEOUT_MS = 15000;
 const REFERENCE_ID_MAX_LENGTH = 40;
+const TERMINAL_PAYOUT_STATUSES = ["posted", "failed", "returned", "canceled"];
+const IN_FLIGHT_PAYOUT_STATUSES = ["created", "pending", "processing", "submitted"];
+const ZERO_DECIMAL_CURRENCIES = new Set([
+    "bif",
+    "clp",
+    "djf",
+    "gnf",
+    "jpy",
+    "kmf",
+    "krw",
+    "mga",
+    "pyg",
+    "rwf",
+    "ugx",
+    "vnd",
+    "vuv",
+    "xaf",
+    "xof",
+    "xpf"
+]);
 
 const trimValue = (value) => String(value || "").trim();
-const getRazorpayXKeyId = () => trimValue(process.env.RAZORPAYX_KEY_ID || process.env.RAZORPAY_KEY_ID);
-const getRazorpayXKeySecret = () => trimValue(process.env.RAZORPAYX_KEY_SECRET || process.env.RAZORPAY_KEY_SECRET);
-const getRazorpayXSourceAccountNumber = () => trimValue(process.env.RAZORPAYX_SOURCE_ACCOUNT_NUMBER);
-const shouldOmitNameField = (error) =>
-    /name\s+is\/are\s+not\s+required\s+and\s+should\s+not\s+be\s+sent/i.test(trimValue(error?.message));
+const normalizeFlagValue = (value) => trimValue(value).toLowerCase();
 
-export const normalizePayoutPhone = (value) => {
-    const digits = trimValue(value).replace(/\D/g, "");
-    return digits || "";
+const getStripeSecretKey = () => trimValue(process.env.STRIPE_SECRET_KEY);
+const getStripePayoutFinancialAccountId = () => trimValue(process.env.STRIPE_PAYOUT_FINANCIAL_ACCOUNT_ID);
+const getStripePayoutRecipientCountry = () => trimValue(process.env.STRIPE_PAYOUT_RECIPIENT_COUNTRY || "IN").toUpperCase();
+const getStripePayoutCurrency = () => trimValue(process.env.STRIPE_PAYOUT_CURRENCY || "INR").toLowerCase();
+const getStripePayoutsEnabled = () => !["0", "false", "off", "disabled"].includes(normalizeFlagValue(process.env.STRIPE_PAYOUTS_ENABLED || "true"));
+
+const getRequestTimeoutMs = () => {
+    const timeoutFromEnv = Number(process.env.STRIPE_PAYOUT_REQUEST_TIMEOUT_MS);
+    return Number.isFinite(timeoutFromEnv) && timeoutFromEnv >= 1000 ? timeoutFromEnv : DEFAULT_REQUEST_TIMEOUT_MS;
 };
 
-export const normalizePayoutVpa = (value) => trimValue(value).toLowerCase();
+const appendSearchParams = (url, searchParams = {}) => {
+    Object.entries(searchParams).forEach(([key, value]) => {
+        if (value === undefined || value === null || value === "") {
+            return;
+        }
 
-export const isWinnerPayoutConfigured = () =>
-    Boolean(
-        getRazorpayXKeyId() &&
-        getRazorpayXKeySecret() &&
-        getRazorpayXSourceAccountNumber()
-    );
+        if (Array.isArray(value)) {
+            value.forEach((item) => {
+                if (item !== undefined && item !== null && item !== "") {
+                    url.searchParams.append(key, String(item));
+                }
+            });
+            return;
+        }
 
-const getAuthorizationHeader = () => {
-    const keyId = getRazorpayXKeyId();
-    const keySecret = getRazorpayXKeySecret();
-
-    if (!keyId || !keySecret) {
-        throw new Error("RazorpayX payout credentials are not configured. Set RAZORPAYX_KEY_ID/SECRET (or RAZORPAY_KEY_ID/SECRET).");
-    }
-
-    return `Basic ${Buffer.from(`${keyId}:${keySecret}`).toString("base64")}`;
+        url.searchParams.append(key, String(value));
+    });
 };
 
-const parseRazorpayXError = async (response) => {
-    let payload;
-
-    try {
-        payload = await response.json();
-    } catch {
-        payload = null;
-    }
-
-    let message =
-        payload?.error?.description ||
+const extractStripeErrorMessage = (payload, status) => {
+    const message =
+        payload?.error?.message ||
         payload?.error?.reason ||
         payload?.message ||
-        `RazorpayX payout request failed with status ${response.status}`;
+        payload?.errors?.[0]?.message ||
+        `Stripe payout request failed with status ${status}`;
 
-    if (/requested url was not found on the server/i.test(message)) {
-        message =
-            "RazorpayX payout APIs are not enabled for this account (or wrong API key set is being used). Enable RazorpayX for this account in test mode and use RazorpayX keys with a valid source account number.";
+    if (/global payouts|public preview|preview feature/i.test(message)) {
+        return "Stripe Global Payouts is not enabled for this Stripe account yet. Enable the feature in Stripe before sending winner payouts.";
     }
 
-    const error = new Error(message);
-    error.statusCode = response.status;
-    error.payload = payload;
-    throw error;
-};
-
-const getRazorpayXTimeoutMs = () => {
-    const timeoutFromEnv = Number(process.env.RAZORPAYX_REQUEST_TIMEOUT_MS);
-
-    if (Number.isFinite(timeoutFromEnv) && timeoutFromEnv >= 1000) {
-        return timeoutFromEnv;
+    if (/financial_account/i.test(message) && /missing|invalid|required/i.test(message)) {
+        return "Stripe payout source account is missing. Set STRIPE_PAYOUT_FINANCIAL_ACCOUNT_ID in server/.env.";
     }
 
-    return DEFAULT_RAZORPAYX_TIMEOUT_MS;
+    if (/requested url was not found/i.test(message)) {
+        return "Stripe Global Payouts API is not available for this Stripe account yet.";
+    }
+
+    return message;
 };
 
-const razorpayXRequest = async (path, { method = "GET", body, idempotencyKey } = {}) => {
+const stripeRequest = async (path, { method = "GET", body, searchParams, contextId, idempotencyKey } = {}) => {
+    const secretKey = getStripeSecretKey();
+
+    if (!secretKey) {
+        throw new Error("Stripe secret key is not configured. Set STRIPE_SECRET_KEY in server/.env.");
+    }
+
+    const url = new URL(path, STRIPE_API_BASE_URL);
+    appendSearchParams(url, searchParams);
+
     const headers = {
-        Authorization: getAuthorizationHeader(),
+        Authorization: `Bearer ${secretKey}`,
+        "Stripe-Version": STRIPE_PAYOUTS_API_VERSION
     };
 
     if (body) {
         headers["Content-Type"] = "application/json";
     }
 
+    if (contextId) {
+        headers["Stripe-Context"] = contextId;
+    }
+
     if (idempotencyKey) {
-        headers["X-Payout-Idempotency"] = idempotencyKey;
+        headers["Idempotency-Key"] = idempotencyKey;
     }
 
     const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), getRazorpayXTimeoutMs());
-    let response;
+    const timeout = setTimeout(() => controller.abort(), getRequestTimeoutMs());
 
     try {
-        response = await fetch(`${RAZORPAYX_BASE_URL}${path}`, {
+        const response = await fetch(url, {
             method,
             headers,
             body: body ? JSON.stringify(body) : undefined,
             signal: controller.signal
         });
-    } catch (error) {
-        const message =
-            error?.name === "AbortError"
-                ? "RazorpayX payout request timed out. Please try again."
-                : error?.message || "Unable to reach RazorpayX payout service.";
-        const wrappedError = new Error(message);
-        wrappedError.statusCode = 502;
-        throw wrappedError;
-    } finally {
-        clearTimeout(timeout);
-    }
 
-    if (!response.ok) {
-        await parseRazorpayXError(response);
-    }
+        const contentType = String(response.headers.get("content-type") || "");
+        const payload = contentType.includes("application/json")
+            ? await response.json().catch(() => null)
+            : await response.text().catch(() => "");
 
-    return response.json();
-};
-
-const createContactRequest = async ({ name, email, phone, referenceId, includeName = true }) =>
-    razorpayXRequest("/contacts", {
-        method: "POST",
-        body: {
-            ...(includeName && name ? { name } : {}),
-            email,
-            contact: phone,
-            type: "customer",
-            reference_id: referenceId
-        }
-    });
-
-const createContact = async ({ name, email, phone, referenceId }) => {
-    try {
-        return await createContactRequest({ name, email, phone, referenceId, includeName: true });
-    } catch (error) {
-        if (!shouldOmitNameField(error)) {
+        if (!response.ok) {
+            const error = new Error(extractStripeErrorMessage(payload, response.status));
+            error.statusCode = response.status;
+            error.payload = payload;
             throw error;
         }
 
-        return createContactRequest({ name, email, phone, referenceId, includeName: false });
+        return payload;
+    } catch (error) {
+        if (error?.name === "AbortError") {
+            const timeoutError = new Error("Stripe payout request timed out. Please try again.");
+            timeoutError.statusCode = 504;
+            throw timeoutError;
+        }
+
+        throw error;
+    } finally {
+        clearTimeout(timeout);
     }
 };
 
-const createVpaFundAccount = async ({ contactId, vpa }) =>
-    razorpayXRequest("/fund_accounts", {
-        method: "POST",
-        body: {
-            contact_id: contactId,
-            account_type: "vpa",
-            vpa: {
-                address: vpa
-            }
-        }
-    });
+const getCurrencyExponent = (currency) => (ZERO_DECIMAL_CURRENCIES.has(trimValue(currency).toLowerCase()) ? 0 : 2);
 
-const createPayout = async ({ fundAccountId, amountInPaise, referenceId, notes }) =>
-    razorpayXRequest("/payouts", {
-        method: "POST",
-        idempotencyKey: randomUUID(),
-        body: {
-            account_number: getRazorpayXSourceAccountNumber(),
-            fund_account_id: fundAccountId,
-            amount: amountInPaise,
-            currency: "INR",
-            mode: "UPI",
-            purpose: "payout",
-            queue_if_low_balance: true,
-            reference_id: referenceId,
-            narration: "Prize Payout",
-            notes
-        }
-    });
+const toMinorUnits = (amount, currency) => {
+    const exponent = getCurrencyExponent(currency);
+    return Math.round(Number(amount || 0) * 10 ** exponent);
+};
 
-const fetchPayout = async (payoutId) => razorpayXRequest(`/payouts/${payoutId}`);
+const fromMinorUnits = (amount, currency) => {
+    const exponent = getCurrencyExponent(currency);
+    return Number(amount || 0) / 10 ** exponent;
+};
 
-const toIsoDate = (value) => {
+const toDate = (value) => {
     if (!value) {
         return undefined;
+    }
+
+    if (value instanceof Date) {
+        return Number.isNaN(value.getTime()) ? undefined : value;
+    }
+
+    const numericValue = Number(value);
+
+    if (Number.isFinite(numericValue) && String(value).trim() !== "") {
+        const milliseconds = numericValue > 1_000_000_000_000 ? numericValue : numericValue * 1000;
+        const parsedNumericDate = new Date(milliseconds);
+        return Number.isNaN(parsedNumericDate.getTime()) ? undefined : parsedNumericDate;
     }
 
     const parsedDate = new Date(value);
     return Number.isNaN(parsedDate.getTime()) ? undefined : parsedDate;
 };
 
-const toDateFromUnix = (value) => {
-    if (!value) {
-        return undefined;
+const getRecipientCapabilityStatus = (recipientAccount) =>
+    recipientAccount?.configuration?.recipient?.capabilities?.bank_accounts?.local?.status ||
+    recipientAccount?.configuration?.recipient?.capabilities?.bank_accounts?.wire?.status ||
+    recipientAccount?.configuration?.recipient?.capabilities?.bank_accounts?.local ||
+    recipientAccount?.configuration?.recipient?.capabilities?.bank_accounts?.wire ||
+    "";
+
+const getRecipientRequirements = (recipientAccount) => recipientAccount?.requirements?.currently_due || [];
+
+const isRecipientReadyForPayout = (recipientAccount) =>
+    Boolean(
+        trimValue(recipientAccount?.configuration?.recipient?.default_outbound_destination) &&
+        ["active", "enabled"].includes(trimValue(getRecipientCapabilityStatus(recipientAccount)).toLowerCase()) &&
+        !getRecipientRequirements(recipientAccount).length
+    );
+
+const createRecipientAccount = async ({ email, displayName, country }) =>
+    stripeRequest("/v2/core/accounts", {
+        method: "POST",
+        body: {
+            contact_email: email,
+            display_name: displayName,
+            identity: {
+                country,
+                entity_type: "individual"
+            },
+            configuration: {
+                recipient: {
+                    capabilities: {
+                        bank_accounts: {
+                            local: {
+                                requested: true
+                            }
+                        }
+                    }
+                }
+            },
+            include: ["configuration.recipient", "requirements", "identity"]
+        }
+    });
+
+const fetchRecipientAccount = async (recipientId) =>
+    stripeRequest(`/v2/core/accounts/${recipientId}`, {
+        searchParams: {
+            include: ["configuration.recipient", "requirements", "identity"]
+        }
+    });
+
+const createRecipientOnboardingLink = async ({ recipientId, refreshUrl, returnUrl, isUpdate }) =>
+    stripeRequest("/v2/core/account_links", {
+        method: "POST",
+        body: {
+            account: recipientId,
+            use_case: isUpdate
+                ? {
+                    type: "account_update",
+                    account_update: {
+                        configurations: ["recipient"],
+                        refresh_url: refreshUrl,
+                        return_url: returnUrl
+                    }
+                }
+                : {
+                    type: "account_onboarding",
+                    account_onboarding: {
+                        configurations: ["recipient"],
+                        refresh_url: refreshUrl,
+                        return_url: returnUrl
+                    }
+                }
+        }
+    });
+
+const createOutboundPayment = async ({ recipientId, amountInMinorUnits, currency, referenceId, description }) => {
+    const financialAccountId = getStripePayoutFinancialAccountId();
+
+    if (!financialAccountId) {
+        throw new Error("Stripe payout source account is missing. Set STRIPE_PAYOUT_FINANCIAL_ACCOUNT_ID in server/.env.");
     }
 
-    const parsedDate = new Date(Number(value) * 1000);
-    return Number.isNaN(parsedDate.getTime()) ? undefined : parsedDate;
+    return stripeRequest("/v2/money_management/outbound_payments", {
+        method: "POST",
+        idempotencyKey: randomUUID(),
+        body: {
+            from: {
+                financial_account: financialAccountId,
+                currency
+            },
+            to: {
+                recipient: recipientId
+            },
+            amount: {
+                value: amountInMinorUnits,
+                currency
+            },
+            description,
+            metadata: {
+                referenceId
+            }
+        }
+    });
 };
 
-const mapRemotePayoutToUserState = (payload, existingState = {}) => ({
-    provider: "razorpayx",
-    payoutId: payload?.id || existingState.payoutId,
-    contactId: payload?.fund_account?.contact_id || existingState.contactId,
-    fundAccountId: payload?.fund_account_id || existingState.fundAccountId,
-    amount: Number(payload?.amount || existingState.amount || 0) / 100,
-    currency: payload?.currency || existingState.currency || "INR",
-    mode: payload?.mode || existingState.mode || "UPI",
-    status: payload?.status || existingState.status,
-    referenceId: payload?.reference_id || existingState.referenceId,
-    utr: payload?.utr || existingState.utr,
-    initiatedAt:
-        toDateFromUnix(payload?.created_at) ||
-        toIsoDate(existingState.initiatedAt) ||
-        new Date(),
-    processedAt:
-        payload?.status === "processed"
-            ? toDateFromUnix(payload?.status_details?.updated_at) || toDateFromUnix(payload?.processed_at) || new Date()
-            : toIsoDate(existingState.processedAt),
-    failureReason:
-        payload?.status === "failed"
-            ? payload?.status_details?.description || payload?.status_details?.reason || existingState.failureReason
-            : existingState.failureReason
-});
+const fetchOutboundPayment = async (payoutId) => stripeRequest(`/v2/money_management/outbound_payments/${payoutId}`);
 
-const isTerminalStatus = (status) => TERMINAL_PAYOUT_STATUSES.includes(status);
+const buildFailureReason = (payload, existingState = {}) =>
+    trimValue(
+        payload?.failure?.reason ||
+        payload?.failure_reason ||
+        payload?.return_details?.reason ||
+        payload?.cancellation_details?.reason ||
+        payload?.last_error?.message ||
+        existingState.failureReason
+    );
 
-const isPayoutInFlight = (status) => IN_FLIGHT_PAYOUT_STATUSES.includes(status);
+const mapRemotePayoutToUserState = (payload, existingState = {}) => {
+    const payoutCurrency = trimValue(payload?.amount?.currency || existingState.currency || getStripePayoutCurrency()).toUpperCase();
+    const amountValue =
+        payload?.amount?.value ??
+        payload?.amount_value ??
+        toMinorUnits(existingState.amount || 0, payoutCurrency);
+    const status = trimValue(payload?.status || existingState.status).toLowerCase();
+
+    return {
+        provider: "stripe",
+        payoutId: payload?.id || existingState.payoutId,
+        amount: fromMinorUnits(amountValue, payoutCurrency),
+        currency: payoutCurrency,
+        mode: "STRIPE_GLOBAL_PAYOUT",
+        status: status || existingState.status,
+        referenceId: trimValue(payload?.metadata?.referenceId || existingState.referenceId),
+        utr: trimValue(
+            payload?.tracking_details?.serial_number ||
+            payload?.tracking_details?.tracking_number ||
+            existingState.utr
+        ),
+        initiatedAt: toDate(payload?.created) || toDate(payload?.created_at) || toDate(existingState.initiatedAt) || new Date(),
+        processedAt:
+            status === "posted"
+                ? toDate(payload?.posted_at) || toDate(payload?.updated_at) || toDate(existingState.processedAt) || new Date()
+                : toDate(existingState.processedAt),
+        failureReason: buildFailureReason(payload, existingState),
+        recipientId: trimValue(payload?.to?.recipient || existingState.recipientId),
+        onboardingRequired: false,
+        beneficiaryName: existingState.beneficiaryName,
+        phone: existingState.phone,
+        vpa: existingState.vpa
+    };
+};
+
+const isTerminalStatus = (status) => TERMINAL_PAYOUT_STATUSES.includes(trimValue(status).toLowerCase());
+const isPayoutInFlight = (status) => IN_FLIGHT_PAYOUT_STATUSES.includes(trimValue(status).toLowerCase());
+
+const ensureUserPayoutDetails = (user, updates = {}) => {
+    user.payoutDetails = {
+        beneficiaryName: trimValue(updates.beneficiaryName ?? user.payoutDetails?.beneficiaryName ?? user.name),
+        email: normalizePayoutEmail(updates.email ?? user.payoutDetails?.email ?? user.email),
+        phone: normalizePayoutPhone(updates.phone ?? user.payoutDetails?.phone),
+        vpa: normalizePayoutVpa(updates.vpa ?? user.payoutDetails?.vpa),
+        stripeRecipientId: trimValue(updates.stripeRecipientId ?? user.payoutDetails?.stripeRecipientId),
+        recipientCountry: trimValue(updates.recipientCountry ?? user.payoutDetails?.recipientCountry ?? getStripePayoutRecipientCountry())
+    };
+};
+
+const ensureStripeRecipient = async (user) => {
+    const beneficiaryName = trimValue(user?.payoutDetails?.beneficiaryName) || trimValue(user?.name);
+    const payoutEmail = normalizePayoutEmail(user?.payoutDetails?.email || user?.email);
+
+    if (!beneficiaryName || !payoutEmail) {
+        return {
+            ready: false,
+            message: "Winner payout details are incomplete. Add beneficiary name and payout email first."
+        };
+    }
+
+    const recipientCountry = trimValue(user?.payoutDetails?.recipientCountry || getStripePayoutRecipientCountry());
+    let recipientAccount;
+    let createdRecipient = false;
+    const existingRecipientId = trimValue(user?.payoutDetails?.stripeRecipientId);
+
+    if (existingRecipientId) {
+        try {
+            recipientAccount = await fetchRecipientAccount(existingRecipientId);
+        } catch (error) {
+            if (error?.statusCode !== 404) {
+                throw error;
+            }
+        }
+    }
+
+    if (!recipientAccount) {
+        recipientAccount = await createRecipientAccount({
+            email: payoutEmail,
+            displayName: beneficiaryName,
+            country: recipientCountry
+        });
+        createdRecipient = true;
+    }
+
+    ensureUserPayoutDetails(user, {
+        beneficiaryName,
+        email: payoutEmail,
+        stripeRecipientId: recipientAccount.id,
+        recipientCountry
+    });
+
+    return {
+        ready: isRecipientReadyForPayout(recipientAccount),
+        createdRecipient,
+        recipientAccount,
+        beneficiaryName,
+        payoutEmail
+    };
+};
+
+export const normalizePayoutPhone = (value) => trimValue(value).replace(/\D/g, "");
+export const normalizePayoutVpa = (value) => trimValue(value).toLowerCase();
+export const normalizePayoutEmail = (value) => trimValue(value).toLowerCase();
+
+const isWinnerPayoutSetupConfigured = () => Boolean(getStripeSecretKey()) && getStripePayoutsEnabled();
+
+export const isWinnerPayoutConfigured = () =>
+    Boolean(getStripeSecretKey() && getStripePayoutFinancialAccountId()) && getStripePayoutsEnabled();
 
 export const buildWinnerReferenceId = (userId, prefix = "win") => {
     const sanitizedPrefix = trimValue(prefix).replace(/[^a-z0-9_-]/gi, "").toLowerCase() || "win";
@@ -229,22 +411,67 @@ export const buildWinnerReferenceId = (userId, prefix = "win") => {
     return rawReferenceId.slice(0, REFERENCE_ID_MAX_LENGTH);
 };
 
+export const createWinnerPayoutSetupLink = async (user, { returnUrl, refreshUrl } = {}) => {
+    if (!user) {
+        throw new Error("Winner account was not found.");
+    }
+
+    if (!isWinnerPayoutSetupConfigured()) {
+        throw new Error("Stripe winner payouts are not configured on the server yet.");
+    }
+
+    const recipientState = await ensureStripeRecipient(user);
+
+    if (!recipientState.recipientAccount?.id) {
+        throw new Error(recipientState.message || "Stripe payout recipient could not be prepared.");
+    }
+
+    const accountLink = await createRecipientOnboardingLink({
+        recipientId: recipientState.recipientAccount.id,
+        refreshUrl,
+        returnUrl,
+        isUpdate: !recipientState.createdRecipient
+    });
+
+    user.latestPayout = {
+        provider: "stripe",
+        amount: Number(user.totalWinnings || 0),
+        currency: getStripePayoutCurrency().toUpperCase(),
+        mode: "STRIPE_GLOBAL_PAYOUT",
+        status: "action_required",
+        referenceId: user.latestPayout?.referenceId || buildWinnerReferenceId(user._id, "setup"),
+        initiatedAt: user.latestPayout?.initiatedAt || new Date(),
+        failureReason: "Complete Stripe payout setup to receive winner funds.",
+        recipientId: recipientState.recipientAccount.id,
+        onboardingRequired: true,
+        beneficiaryName: recipientState.beneficiaryName
+    };
+    user.payoutStatus = Number(user.totalWinnings || 0) > 0 ? "pending" : user.payoutStatus;
+    await user.save();
+
+    return {
+        url: accountLink?.url,
+        expiresAt: accountLink?.expires_at,
+        recipientId: recipientState.recipientAccount.id,
+        message: "Stripe payout setup link created successfully."
+    };
+};
+
 export const syncLatestUserPayout = async (user) => {
-    if (!user?.latestPayout?.payoutId || user.latestPayout.provider !== "razorpayx" || !isWinnerPayoutConfigured()) {
+    if (!user?.latestPayout?.payoutId || user.latestPayout.provider !== "stripe" || !isWinnerPayoutConfigured()) {
         return user;
     }
 
-    const currentStatus = user.latestPayout.status;
+    const currentStatus = trimValue(user.latestPayout.status).toLowerCase();
 
     if (isTerminalStatus(currentStatus) && user.payoutStatus === "paid") {
         return user;
     }
 
     try {
-        const payout = await fetchPayout(user.latestPayout.payoutId);
+        const payout = await fetchOutboundPayment(user.latestPayout.payoutId);
         const nextLatestPayout = mapRemotePayoutToUserState(payout, user.latestPayout);
-        const nextPayoutStatus = payout?.status === "processed" ? "paid" : "pending";
-
+        const nextPayoutStatus = trimValue(payout?.status).toLowerCase() === "posted" ? "paid" : "pending";
         const hasChanges =
             JSON.stringify(user.latestPayout) !== JSON.stringify(nextLatestPayout) ||
             user.payoutStatus !== nextPayoutStatus;
@@ -290,37 +517,55 @@ export const attemptAutomaticWinnerPayout = async (user) => {
         return {
             attempted: false,
             sent: false,
-            message: "Automatic payout is not configured on the server yet."
+            message: "Stripe winner payouts are not configured on the server yet."
         };
     }
 
-    const beneficiaryName = trimValue(user.payoutDetails?.beneficiaryName) || trimValue(user.name);
-    const payoutPhone = normalizePayoutPhone(user.payoutDetails?.phone);
-    const payoutVpa = normalizePayoutVpa(user.payoutDetails?.vpa);
-
-    if (!beneficiaryName || !payoutPhone || !payoutVpa) {
+    if (user.latestPayout?.payoutId && (isPayoutInFlight(user.latestPayout.status) || trimValue(user.latestPayout.status).toLowerCase() === "posted")) {
         return {
             attempted: false,
-            sent: false,
-            message: "Winner payout details are incomplete. Add beneficiary name, phone number, and UPI ID first."
-        };
-    }
-
-    if (user.latestPayout?.payoutId && (isPayoutInFlight(user.latestPayout.status) || user.latestPayout.status === "processed")) {
-        return {
-            attempted: false,
-            sent: user.latestPayout.status === "processed",
+            sent: trimValue(user.latestPayout.status).toLowerCase() === "posted",
             message:
-                user.latestPayout.status === "processed"
+                trimValue(user.latestPayout.status).toLowerCase() === "posted"
                     ? "This payout has already been processed."
                     : `This payout is already ${user.latestPayout.status}.`
         };
     }
 
-    const referenceId = buildWinnerReferenceId(user._id, "win");
-    const amountInPaise = Math.round(Number(user.totalWinnings || 0) * 100);
+    const recipientState = await ensureStripeRecipient(user);
 
-    if (!Number.isFinite(amountInPaise) || amountInPaise <= 0) {
+    if (!recipientState.ready) {
+        user.latestPayout = {
+            provider: "stripe",
+            amount: Number(user.totalWinnings || 0),
+            currency: getStripePayoutCurrency().toUpperCase(),
+            mode: "STRIPE_GLOBAL_PAYOUT",
+            status: "action_required",
+            referenceId: user.latestPayout?.referenceId || buildWinnerReferenceId(user._id, "setup"),
+            initiatedAt: user.latestPayout?.initiatedAt || new Date(),
+            failureReason:
+                recipientState.message ||
+                "Stripe payout setup is incomplete. Ask the winner to open Profile Settings or Winnings and finish Stripe payout onboarding.",
+            recipientId: recipientState.recipientAccount?.id,
+            onboardingRequired: true,
+            beneficiaryName: recipientState.beneficiaryName
+        };
+        user.payoutStatus = "pending";
+        await user.save();
+
+        return {
+            attempted: false,
+            sent: false,
+            message:
+                recipientState.message ||
+                "Stripe payout setup is incomplete. Ask the winner to finish Stripe payout onboarding first."
+        };
+    }
+
+    const payoutCurrency = getStripePayoutCurrency();
+    const amountInMinorUnits = toMinorUnits(Number(user.totalWinnings || 0), payoutCurrency);
+
+    if (!Number.isFinite(amountInMinorUnits) || amountInMinorUnits <= 0) {
         return {
             attempted: false,
             sent: false,
@@ -328,74 +573,52 @@ export const attemptAutomaticWinnerPayout = async (user) => {
         };
     }
 
+    const referenceId = buildWinnerReferenceId(user._id, "win");
+
     try {
-        const contact = await createContact({
-            name: beneficiaryName,
-            email: trimValue(user.email),
-            phone: payoutPhone,
-            referenceId
-        });
-
-        const fundAccount = await createVpaFundAccount({
-            contactId: contact.id,
-            vpa: payoutVpa
-        });
-
-        const payout = await createPayout({
-            fundAccountId: fundAccount.id,
-            amountInPaise,
+        const payout = await createOutboundPayment({
+            recipientId: recipientState.recipientAccount.id,
+            amountInMinorUnits,
+            currency: payoutCurrency,
             referenceId,
-            notes: {
-                userId: String(user._id),
-                email: trimValue(user.email),
-                purpose: "winner-prize"
-            }
+            description: `Winner prize for ${trimValue(user.name) || trimValue(user.email) || "player"}`
         });
 
-        user.latestPayout = mapRemotePayoutToUserState(
-            {
-                ...payout,
-                fund_account_id: fundAccount.id,
-                fund_account: {
-                    contact_id: contact.id
-                }
-            },
-            user.latestPayout
-        );
-        user.payoutStatus = payout.status === "processed" ? "paid" : "pending";
+        user.latestPayout = {
+            ...mapRemotePayoutToUserState(payout, user.latestPayout),
+            referenceId,
+            beneficiaryName: recipientState.beneficiaryName,
+            recipientId: recipientState.recipientAccount.id
+        };
+        user.payoutStatus = trimValue(payout?.status).toLowerCase() === "posted" ? "paid" : "pending";
         await user.save();
 
-        const isPaid = payout.status === "processed";
+        const isPaid = trimValue(payout?.status).toLowerCase() === "posted";
         return {
             attempted: true,
             sent: isPaid,
             message: isPaid
-                ? "Winner payout processed successfully."
-                : `Winner payout started successfully and is currently ${payout.status}.`
+                ? "Winner payout processed successfully through Stripe."
+                : `Winner payout started successfully through Stripe and is currently ${payout?.status || "processing"}.`
         };
     } catch (error) {
-        const failureMessage = error?.message || "Unable to send the winner payout automatically.";
+        const failureMessage = error?.message || "Unable to send the winner payout automatically through Stripe.";
 
-        try {
-            user.latestPayout = {
-                provider: "razorpayx",
-                amount: Number(user.totalWinnings || 0),
-                currency: "INR",
-                mode: "UPI",
-                status: "failed",
-                referenceId,
-                initiatedAt: new Date(),
-                failureReason: failureMessage
-            };
-            user.payoutStatus = "pending";
-            await user.save();
-        } catch {
-            return {
-                attempted: true,
-                sent: false,
-                message: failureMessage
-            };
-        }
+        user.latestPayout = {
+            provider: "stripe",
+            amount: Number(user.totalWinnings || 0),
+            currency: payoutCurrency.toUpperCase(),
+            mode: "STRIPE_GLOBAL_PAYOUT",
+            status: "failed",
+            referenceId,
+            initiatedAt: new Date(),
+            failureReason: failureMessage,
+            recipientId: recipientState.recipientAccount?.id,
+            onboardingRequired: false,
+            beneficiaryName: recipientState.beneficiaryName
+        };
+        user.payoutStatus = "pending";
+        await user.save();
 
         return {
             attempted: true,

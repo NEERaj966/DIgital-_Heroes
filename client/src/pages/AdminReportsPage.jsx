@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { adminApi } from '../utils/api'
 import AdminPageShell, { adminPanelClass } from './AdminPageShell'
+import AdminWinnerDonationsSection from './AdminWinnerDonationsSection'
 
 const AdminReportsPage = () => {
   const [reports, setReports] = useState(null)
@@ -45,6 +46,8 @@ const AdminReportsPage = () => {
           </div>
         ))}
       </section>
+
+      {!error ? <AdminWinnerDonationsSection donations={reports?.winnerCharityContributions || []} /> : null}
     </AdminPageShell>
   )
 }

@@ -2,9 +2,18 @@ import { createContext, useCallback, useContext, useEffect, useMemo, useState } 
 import { userApi } from '../utils/api'
 
 const UserContext = createContext(null)
+const USER_STORAGE_KEY = 'digital-heroes-user'
+const USER_TOKEN_STORAGE_KEY = 'digital-heroes-token'
 
 const getStoredUser = () => {
-  const savedUser = localStorage.getItem('digital-heroes-user')
+  const savedToken = localStorage.getItem(USER_TOKEN_STORAGE_KEY)
+
+  if (!savedToken) {
+    localStorage.removeItem(USER_STORAGE_KEY)
+    return null
+  }
+
+  const savedUser = localStorage.getItem(USER_STORAGE_KEY)
 
   if (!savedUser) {
     return null
@@ -13,12 +22,13 @@ const getStoredUser = () => {
   try {
     return JSON.parse(savedUser)
   } catch {
-    localStorage.removeItem('digital-heroes-user')
+    localStorage.removeItem(USER_STORAGE_KEY)
+    localStorage.removeItem(USER_TOKEN_STORAGE_KEY)
     return null
   }
 }
 
-const getStoredToken = () => localStorage.getItem('digital-heroes-token')
+const getStoredToken = () => localStorage.getItem(USER_TOKEN_STORAGE_KEY)
 
 const UserProvider = ({ children }) => {
   const [currentUser, setCurrentUser] = useState(() => {
@@ -31,7 +41,7 @@ const UserProvider = ({ children }) => {
 
   const persistUser = useCallback((user) => {
     setCurrentUser(user)
-    localStorage.setItem('digital-heroes-user', JSON.stringify(user))
+    localStorage.setItem(USER_STORAGE_KEY, JSON.stringify(user))
   }, [])
 
   const saveUserSession = useCallback((user, token) => {
@@ -39,7 +49,7 @@ const UserProvider = ({ children }) => {
     setSessionNotice('')
 
     if (token) {
-      localStorage.setItem('digital-heroes-token', token)
+      localStorage.setItem(USER_TOKEN_STORAGE_KEY, token)
     }
   }, [persistUser])
 
@@ -50,8 +60,8 @@ const UserProvider = ({ children }) => {
       setSessionNotice('')
     }
 
-    localStorage.removeItem('digital-heroes-user')
-    localStorage.removeItem('digital-heroes-token')
+    localStorage.removeItem(USER_STORAGE_KEY)
+    localStorage.removeItem(USER_TOKEN_STORAGE_KEY)
   }, [])
 
   const refreshUserSession = useCallback(async () => {
@@ -99,6 +109,7 @@ const UserProvider = ({ children }) => {
 
   useEffect(() => {
     if (!getStoredToken()) {
+      setCurrentUser(null)
       setIsSessionLoading(false)
       return
     }

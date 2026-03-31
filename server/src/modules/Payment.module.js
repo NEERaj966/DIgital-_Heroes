@@ -18,6 +18,12 @@ const paymentSchema = new mongoose.Schema({
     default: "event"
   },
 
+  provider: {
+    type: String,
+    enum: ["stripe", "razorpay"],
+    default: "stripe"
+  },
+
   subscriptionPlan: {
     type: String,
     enum: SUBSCRIPTION_PLAN_CODES
@@ -35,7 +41,7 @@ const paymentSchema = new mongoose.Schema({
 
   paymentMethod: {
     type: String,
-    default: "razorpay"
+    default: "stripe"
   },
 
   paymentStatus: {
@@ -45,6 +51,17 @@ const paymentSchema = new mongoose.Schema({
   },
 
   transactionId: String,
+
+  providerSessionId: {
+    type: String,
+    index: true
+  },
+
+  providerPaymentIntentId: String,
+
+  providerSubscriptionId: String,
+
+  providerCustomerId: String,
 
   razorpayOrderId: {
     type: String,

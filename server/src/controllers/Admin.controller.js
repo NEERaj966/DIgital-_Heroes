@@ -7,7 +7,7 @@ import { blackListTokenModel } from '../modules/blacklist.module.js'
 import { uploadOnCloudinary } from '../utils/Cloudinary.js'
 import { Score } from '../modules/Score.module.js'
 import { Charity } from '../modules/Charities.module.js'
-// import { Donation } from '../modules/Donation.module.js'
+import { Donation } from '../modules/Donation.module.js'
 import { Payment } from '../modules/Payment.module.js'
 import { Draw } from '../modules/Draw.module.js'
 import { getSubscriptionPlanConfig } from '../constants/subscriptionPlans.js'
@@ -18,8 +18,7 @@ import {
     attemptAutomaticWinnerPayout,
     buildWinnerReferenceId,
     isWinnerPayoutConfigured,
-    normalizePayoutPhone,
-    normalizePayoutVpa,
+    normalizePayoutEmail,
     syncLatestUserPayout
 } from '../utils/winnerPayout.js'
 
@@ -88,6 +87,7 @@ const parseWinnerPayoutStatus = (value) => {
 
 const normalizeEmail = (email) => String(email || '').trim().toLowerCase()
 const normalizeBeneficiaryName = (value) => String(value || '').trim()
+const roundToTwo = (value) => Number(Number(value || 0).toFixed(2))
 const hasDrawWinners = (result) =>
     Number(result?.matchCounts?.three || 0) +
     Number(result?.matchCounts?.four || 0) +
@@ -105,13 +105,11 @@ const ensureAdminGoogleAccess = (userLikeRecord) => {
 
 const getManualPayoutRecipientDetails = (user) => {
     const beneficiaryName = normalizeBeneficiaryName(user?.payoutDetails?.beneficiaryName) || normalizeBeneficiaryName(user?.name)
-    const phone = normalizePayoutPhone(user?.payoutDetails?.phone)
-    const vpa = normalizePayoutVpa(user?.payoutDetails?.vpa)
+    const email = normalizePayoutEmail(user?.payoutDetails?.email || user?.email)
 
     return {
         beneficiaryName,
-        phone,
-        vpa
+        email
     }
 }
 
@@ -155,6 +153,102 @@ const getCarryOverForMonth = async (drawMonth) => {
     }).sort({ drawMonth: -1 })
 
     return previousPublishedDraw?.rolloverToNextMonth || 0
+}
+
+const buildWinnerAwardAdjustments = async (draw) => {
+    const publishedWinners = draw.publishedResult?.winners || []
+    const winnersWithPrize = publishedWinners.filter((winner) => Number(winner.prizeAmount || 0) > 0)
+
+    if (!winnersWithPrize.length) {
+        return {
+            userUpdates: [],
+            charityUpdates: [],
+            donationRecords: []
+        }
+    }
+
+    const winnerUsers = await User.find({ _id: { $in: winnersWithPrize.map((winner) => winner.userId) } })
+        .select("preferredCharity charityContributionPercentage")
+
+    const winnerUserMap = new Map(
+        winnerUsers.map((user) => [String(user._id), user])
+    )
+    const charityTotals = new Map()
+    const donationRecords = []
+
+    const userUpdates = publishedWinners
+        .filter((winner) => Number(winner.prizeAmount || 0) > 0)
+        .map((winner) => {
+            const winnerUser = winnerUserMap.get(String(winner.userId))
+            const contributionPercentage = winnerUser?.preferredCharity
+                ? Math.min(100, Math.max(10, Number(winnerUser.charityContributionPercentage || 10)))
+                : 0
+            const grossWinningAmount = roundToTwo(Number(winner.prizeAmount || 0))
+            const donationAmount = winnerUser?.preferredCharity
+                ? roundToTwo((grossWinningAmount * contributionPercentage) / 100)
+                : 0
+            const netWinningAmount = roundToTwo(grossWinningAmount - donationAmount)
+
+            winner.prizeAmount = netWinningAmount
+
+            if (winnerUser?.preferredCharity && donationAmount > 0) {
+                const charityId = String(winnerUser.preferredCharity)
+                charityTotals.set(charityId, roundToTwo((charityTotals.get(charityId) || 0) + donationAmount))
+                donationRecords.push({
+                    user: winner.userId,
+                    charity: winnerUser.preferredCharity,
+                    drawMonth: draw.drawMonth,
+                    grossWinningAmount,
+                    amount: donationAmount,
+                    netWinningAmount,
+                    contributionPercentage
+                })
+            }
+
+            const update = {
+                $inc: {
+                    totalWinnings: netWinningAmount,
+                    totalDonations: donationAmount
+                }
+            }
+
+            if (netWinningAmount > 0) {
+                update.$set = {
+                    payoutStatus: 'pending',
+                    winnerProof: {
+                        proofUrl: '',
+                        status: 'not_submitted',
+                        uploadedAt: null,
+                        reviewedAt: null,
+                        reviewNotes: ''
+                    }
+                }
+            }
+
+            return {
+                updateOne: {
+                    filter: { _id: winner.userId },
+                    update
+                }
+            }
+        })
+
+    const charityUpdates = [...charityTotals.entries()].map(([charityId, amount]) => ({
+        updateOne: {
+            filter: { _id: charityId },
+            update: {
+                $inc: {
+                    totalDonations: amount
+                }
+            }
+        }
+    }))
+
+    return {
+        userUpdates,
+        charityUpdates,
+        donationRecords
+    }
 }
 
 const getCurrentMonthlyDraw = async () => {
@@ -227,29 +321,18 @@ const applyDrawConfiguration = (draw, payload = {}) => {
 const applyPublishedDrawAwards = async (draw) => {
     if (draw.awardsApplied) return draw
 
-    const winnerAdjustments = (draw.publishedResult?.winners || []).filter((winner) => Number(winner.prizeAmount) > 0)
+    const { userUpdates, charityUpdates, donationRecords } = await buildWinnerAwardAdjustments(draw)
 
-    if (winnerAdjustments.length) {
-        await User.bulkWrite(
-            winnerAdjustments.map((winner) => ({
-                updateOne: {
-                    filter: { _id: winner.userId },
-                    update: {
-                        $inc: { totalWinnings: Number(winner.prizeAmount) },
-                        $set: {
-                            payoutStatus: 'pending',
-                            winnerProof: {
-                                proofUrl: '',
-                                status: 'not_submitted',
-                                uploadedAt: null,
-                                reviewedAt: null,
-                                reviewNotes: ''
-                            }
-                        }
-                    }
-                }
-            }))
-        )
+    if (userUpdates.length) {
+        await User.bulkWrite(userUpdates)
+    }
+
+    if (charityUpdates.length) {
+        await Charity.bulkWrite(charityUpdates)
+    }
+
+    if (donationRecords.length) {
+        await Donation.insertMany(donationRecords)
     }
 
     draw.awardsApplied = true
@@ -767,10 +850,10 @@ const updateAdminWinner = asyncHandler(async (req, res) => {
         if (requestedPaidTransition) {
             const recipientDetails = getManualPayoutRecipientDetails(user)
 
-            if (!recipientDetails.beneficiaryName || !recipientDetails.phone || !recipientDetails.vpa) {
+            if (!recipientDetails.beneficiaryName || !recipientDetails.email) {
                 throw new ApiError(
                     400,
-                    "Winner payout details are incomplete. Ask the user to add beneficiary name, phone number, and UPI ID in profile settings first."
+                    "Winner payout details are incomplete. Ask the user to add beneficiary name and payout email in profile settings first."
                 )
             }
 
@@ -782,7 +865,7 @@ const updateAdminWinner = asyncHandler(async (req, res) => {
                     fundAccountId: undefined,
                     amount: Number(user.totalWinnings || 0),
                     currency: "INR",
-                    mode: "MANUAL_UPI",
+                    mode: "MANUAL_STRIPE",
                     status: "processed",
                     referenceId: buildWinnerReferenceId(user._id, "man"),
                     utr: undefined,
@@ -790,8 +873,10 @@ const updateAdminWinner = asyncHandler(async (req, res) => {
                     processedAt: new Date(),
                     failureReason: "",
                     beneficiaryName: recipientDetails.beneficiaryName,
-                    phone: recipientDetails.phone,
-                    vpa: recipientDetails.vpa
+                    phone: "",
+                    vpa: "",
+                    recipientId: user.payoutDetails?.stripeRecipientId,
+                    onboardingRequired: false
                 }
                 user.payoutStatus = "paid"
             }
@@ -810,10 +895,10 @@ const updateAdminWinner = asyncHandler(async (req, res) => {
                     successMessage = payoutAttempt.message
                 }
             } catch (error) {
-                successMessage = error?.message || "Winner update saved, but Razorpay payout could not be completed right now."
+                successMessage = error?.message || "Winner update saved, but Stripe payout could not be completed right now."
             }
         } else {
-            successMessage = "Winner marked as paid manually (RazorpayX is not configured on server)."
+            successMessage = "Winner marked as paid manually (Stripe payout automation is not configured on server)."
         }
     }
 
@@ -848,20 +933,27 @@ const getAdminReports = asyncHandler(async (_, res) => {
         User.countDocuments({ role: { $ne: "admin" } }),
         User.find({ role: { $ne: "admin" } }).select("totalWinnings winnerProof payoutStatus"),
         Charity.find().select("totalDonations"),
-        Donation.find().select("amount"),
+        Donation.find()
+            .populate({ path: "user", select: "name" })
+            .populate({ path: "charity", select: "name" })
+            .sort({ createdAt: -1 }),
         Payment.find({ paymentStatus: "completed" }).select("amount paymentFor"),
         Score.countDocuments()
     ])
 
     const totalPrizePool = users.reduce((sum, user) => sum + (user.totalWinnings || 0), 0)
-    const charityContributionTotals =
-        charities.reduce((sum, charity) => sum + (charity.totalDonations || 0), 0) +
-        donations.reduce((sum, donation) => sum + (donation.amount || 0), 0)
+    const charityContributionTotals = charities.reduce((sum, charity) => sum + (charity.totalDonations || 0), 0)
     const completedSubscriptionRevenue = completedPayments
         .filter((payment) => payment.paymentFor === "subscription")
         .reduce((sum, payment) => sum + (payment.amount || 0), 0)
     const proofPendingCount = users.filter((user) => user.winnerProof?.status === "pending").length
     const payoutsCompleted = users.filter((user) => normalizePayoutStatus(user.payoutStatus) === "paid").length
+    const winnerCharityContributions = donations.map((donation) => ({
+        _id: donation._id,
+        userName: donation.user?.name || '',
+        amount: donation.amount || 0,
+        charityName: donation.charity?.name || ''
+    }))
 
     return res.status(200).json(
         new ApiResponse(
@@ -870,6 +962,7 @@ const getAdminReports = asyncHandler(async (_, res) => {
                 totalUsers,
                 totalPrizePool,
                 charityContributionTotals,
+                winnerCharityContributions,
                 drawStatistics: {
                     totalScores,
                     proofPendingCount,

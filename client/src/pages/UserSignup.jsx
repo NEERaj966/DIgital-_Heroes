@@ -1,8 +1,7 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { motion } from 'framer-motion'
 import { Link, useNavigate, useSearchParams } from 'react-router-dom'
 import api from '../utils/api'
-import { loadRazorpayCheckout } from '../utils/razorpay'
 import {
   DEFAULT_SUBSCRIPTION_PLAN,
   SUBSCRIPTION_PLANS,
@@ -12,7 +11,6 @@ import {
 import { useAdmin } from '../context/AdminContext'
 import { useUser } from '../context/UserContext'
 import GoogleAuthButton from '../componant/GoogleAuthButton'
-import { decodeGoogleCredential } from '../utils/googleAuth'
 
 const cardVariants = {
   hidden: { opacity: 0, y: 36 },
@@ -34,38 +32,6 @@ const fieldMotion = {
 const inputClassName =
   'w-full rounded-2xl border border-white/10 bg-white/5 px-4 py-3 text-sm text-white outline-none transition placeholder:text-slate-400 focus:border-amber-300/70 focus:bg-white/10'
 
-const openRazorpayCheckout = ({ keyId, order, customer }) =>
-  new Promise((resolve, reject) => {
-    const Razorpay = window.Razorpay
-
-    if (!Razorpay) {
-      reject(new Error('Razorpay checkout is not available'))
-      return
-    }
-
-    const razorpay = new Razorpay({
-      key: keyId,
-      amount: order.amount,
-      currency: order.currency,
-      name: 'Digital Heroes',
-      description: 'Subscription payment',
-      order_id: order.id,
-      prefill: {
-        name: customer.name,
-        email: customer.email,
-      },
-      theme: {
-        color: '#f59e0b',
-      },
-      handler: (response) => resolve(response),
-      modal: {
-        ondismiss: () => reject(new Error('Payment cancelled')),
-      },
-    })
-
-    razorpay.open()
-  })
-
 const UserSignup = () => {
   const navigate = useNavigate()
   const { clearAdminSession } = useAdmin()
@@ -73,6 +39,9 @@ const UserSignup = () => {
   const [searchParams, setSearchParams] = useSearchParams()
   const requestedPlan = searchParams.get('plan')
   const initialPlan = isValidSubscriptionPlan(requestedPlan) ? requestedPlan : DEFAULT_SUBSCRIPTION_PLAN
+  const checkoutState = searchParams.get('checkout')
+  const sessionId = searchParams.get('session_id')
+  const hasConfirmedSession = useRef(false)
   const [form, setForm] = useState({
     name: '',
     email: '',
@@ -98,6 +67,60 @@ const UserSignup = () => {
     }))
   }, [form.subscriptionPlan, initialPlan])
 
+  useEffect(() => {
+    if (checkoutState !== 'cancelled') {
+      return
+    }
+
+    setState({
+      loading: false,
+      message: 'Stripe checkout was cancelled before completing the subscription payment.',
+      type: 'error',
+    })
+  }, [checkoutState])
+
+  useEffect(() => {
+    if (checkoutState !== 'success' || !sessionId || hasConfirmedSession.current) {
+      return
+    }
+
+    hasConfirmedSession.current = true
+    setState({
+      loading: true,
+      message: 'Verifying your Stripe payment and activating the subscription...',
+      type: '',
+    })
+
+    const confirmCheckout = async () => {
+      try {
+        const response = await api.post('/users/subscription/confirm', { sessionId })
+        const authUser = response.data?.data?.user
+        const token = response.data?.data?.token
+
+        if (authUser) {
+          clearAdminSession()
+          saveUserSession(authUser, token)
+        }
+
+        setState({
+          loading: false,
+          message: response.data?.message || 'Stripe payment verified successfully.',
+          type: 'success',
+        })
+
+        navigate('/profile', { replace: true })
+      } catch (error) {
+        setState({
+          loading: false,
+          message: error.response?.data?.message || 'Unable to verify your Stripe payment right now.',
+          type: 'error',
+        })
+      }
+    }
+
+    confirmCheckout()
+  }, [checkoutState, clearAdminSession, navigate, saveUserSession, sessionId])
+
   const handleChange = (event) => {
     const { name, value, files } = event.target
 
@@ -110,12 +133,22 @@ const UserSignup = () => {
   const handlePlanSelect = (planCode) => {
     const nextParams = new URLSearchParams(searchParams)
     nextParams.set('plan', planCode)
+    nextParams.delete('checkout')
+    nextParams.delete('session_id')
     setSearchParams(nextParams, { replace: true })
 
     setForm((prev) => ({
       ...prev,
       subscriptionPlan: planCode,
     }))
+  }
+
+  const redirectToCheckout = (checkoutUrl) => {
+    if (!checkoutUrl) {
+      throw new Error('Stripe checkout URL is not available')
+    }
+
+    window.location.assign(checkoutUrl)
   }
 
   const handleSubmit = async (event) => {
@@ -138,42 +171,18 @@ const UserSignup = () => {
     if ([form.name, form.email, form.password].some((field) => !field.trim())) {
       setState({
         loading: false,
-        message: 'Name, email, and password are required before starting payment',
+        message: 'Name, email, and password are required before starting checkout',
         type: 'error',
       })
       return
     }
 
     try {
-      const orderResponse = await api.post('/users/subscription/order', {
-        name: form.name,
-        email: form.email,
-        subscriptionPlan: form.subscriptionPlan,
-      })
-
-      const Razorpay = await loadRazorpayCheckout()
-
-      if (!Razorpay) {
-        throw new Error('Unable to initialize Razorpay checkout')
-      }
-
-      const paymentData = await openRazorpayCheckout({
-        keyId: orderResponse.data?.data?.keyId,
-        order: orderResponse.data?.data?.order,
-        customer: {
-          name: form.name,
-          email: form.email,
-        },
-      })
-
       const formData = new FormData()
       formData.append('name', form.name)
       formData.append('email', form.email)
       formData.append('password', form.password)
       formData.append('subscriptionPlan', form.subscriptionPlan)
-      formData.append('razorpayOrderId', paymentData.razorpay_order_id)
-      formData.append('razorpayPaymentId', paymentData.razorpay_payment_id)
-      formData.append('razorpaySignature', paymentData.razorpay_signature)
 
       if (form.handicap !== '') {
         formData.append('handicap', form.handicap)
@@ -183,40 +192,12 @@ const UserSignup = () => {
         formData.append('avatar', form.avatar)
       }
 
-      const response = await api.post('/users/register', formData)
-      const authUser = response.data?.data?.user
-      const token = response.data?.data?.token
-
-      setState({
-        loading: false,
-        message: response.data?.message || 'Account created successfully',
-        type: 'success',
-      })
-
-      setForm({
-        name: '',
-        email: '',
-        password: '',
-        handicap: '',
-        avatar: null,
-        subscriptionPlan: DEFAULT_SUBSCRIPTION_PLAN,
-      })
-
-      if (authUser) {
-        clearAdminSession()
-        saveUserSession(authUser, token)
-      }
-
-      navigate('/profile')
+      const response = await api.post('/users/subscription/checkout-session', formData)
+      redirectToCheckout(response.data?.data?.checkoutUrl)
     } catch (error) {
-      const fallbackMessage =
-        error.message === 'Payment cancelled'
-          ? 'Razorpay checkout was cancelled before completing the subscription payment'
-          : 'Unable to create account right now'
-
       setState({
         loading: false,
-        message: error.response?.data?.message || fallbackMessage,
+        message: error.response?.data?.message || 'Unable to start Stripe checkout right now',
         type: 'error',
       })
     }
@@ -231,42 +212,14 @@ const UserSignup = () => {
       })
 
       try {
-        const googleProfile = decodeGoogleCredential(googleToken)
-        const customerName = form.name.trim() || googleProfile.name || googleProfile.given_name || 'Google User'
-        const customerEmail = googleProfile.email
-
         if (!form.subscriptionPlan) {
           throw new Error('Please choose a subscription plan before continuing with Google')
         }
 
-        const orderResponse = await api.post('/users/subscription/order', {
-          name: customerName,
-          email: customerEmail,
-          subscriptionPlan: form.subscriptionPlan,
-        })
-
-        const Razorpay = await loadRazorpayCheckout()
-
-        if (!Razorpay) {
-          throw new Error('Unable to initialize Razorpay checkout')
-        }
-
-        const paymentData = await openRazorpayCheckout({
-          keyId: orderResponse.data?.data?.keyId,
-          order: orderResponse.data?.data?.order,
-          customer: {
-            name: customerName,
-            email: customerEmail,
-          },
-        })
-
         const formData = new FormData()
         formData.append('googleToken', googleToken)
-        formData.append('name', customerName)
+        formData.append('name', form.name)
         formData.append('subscriptionPlan', form.subscriptionPlan)
-        formData.append('razorpayOrderId', paymentData.razorpay_order_id)
-        formData.append('razorpayPaymentId', paymentData.razorpay_payment_id)
-        formData.append('razorpaySignature', paymentData.razorpay_signature)
 
         if (form.handicap !== '') {
           formData.append('handicap', form.handicap)
@@ -276,36 +229,17 @@ const UserSignup = () => {
           formData.append('avatar', form.avatar)
         }
 
-        const response = await api.post('/users/google/register', formData)
-        const authUser = response.data?.data?.user
-        const token = response.data?.data?.token
-
-        if (authUser) {
-          clearAdminSession()
-          saveUserSession(authUser, token)
-        }
-
-        setState({
-          loading: false,
-          message: response.data?.message || 'Account created with Google successfully',
-          type: 'success',
-        })
-
-        navigate('/profile')
+        const response = await api.post('/users/subscription/google/checkout-session', formData)
+        redirectToCheckout(response.data?.data?.checkoutUrl)
       } catch (error) {
-        const fallbackMessage =
-          error.message === 'Payment cancelled'
-            ? 'Razorpay checkout was cancelled before completing the subscription payment'
-            : 'Unable to create your Google account right now'
-
         setState({
           loading: false,
-          message: error.response?.data?.message || error.message || fallbackMessage,
+          message: error.response?.data?.message || error.message || 'Unable to start Stripe checkout right now',
           type: 'error',
         })
       }
     },
-    [clearAdminSession, form.avatar, form.handicap, form.name, form.subscriptionPlan, navigate, saveUserSession]
+    [form.avatar, form.handicap, form.name, form.subscriptionPlan]
   )
 
   return (
@@ -327,7 +261,7 @@ const UserSignup = () => {
           Create your player account and start making every round count.
         </h2>
         <p className="mt-4 text-sm leading-7 text-slate-300 sm:text-base sm:leading-8">
-          Choose a subscription, complete the Razorpay payment, and create your subscriber account with email/password or Google.
+          Choose a subscription, continue through Stripe Checkout, and then return here to activate your subscriber account.
         </p>
       </div>
 
@@ -337,7 +271,7 @@ const UserSignup = () => {
             Subscription Required
           </p>
           <p className="mt-3 text-sm leading-7 text-slate-200">
-            Only users with an active subscription can sign in and access current user features. Your selected plan becomes active after successful Razorpay payment.
+            Only users with an active subscription can sign in and access current user features. Your selected plan becomes active after successful Stripe payment verification.
           </p>
         </div>
 
@@ -449,7 +383,7 @@ const UserSignup = () => {
             disabled={state.loading}
             className="inline-flex w-full items-center justify-center rounded-full bg-gradient-to-r from-amber-300 via-orange-400 to-rose-500 px-6 py-3 text-sm font-semibold text-slate-950 shadow-[0_18px_36px_rgba(249,115,22,0.28)] sm:w-auto"
           >
-            {state.loading ? 'Processing Payment...' : 'Pay & Create Account'}
+            {state.loading ? 'Preparing Checkout...' : 'Continue To Stripe'}
           </motion.button>
         </div>
 

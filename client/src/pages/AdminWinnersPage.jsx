@@ -81,8 +81,7 @@ const AdminWinnerRow = ({ winner, onSave }) => {
   const canMarkPaid = winnerProofStatus === 'approved'
   const hasPayoutDetails = Boolean(
     (winner.payoutDetails?.beneficiaryName || winner.name) &&
-      winner.payoutDetails?.phone &&
-      winner.payoutDetails?.vpa
+      (winner.payoutDetails?.email || winner.email)
   )
 
   return (
@@ -97,10 +96,10 @@ const AdminWinnerRow = ({ winner, onSave }) => {
           <p className="mt-2 text-sm text-slate-300">Proof: {formatStatus(winner.winnerProof?.status)}</p>
           <p className="mt-1 text-sm text-slate-300">Payment: {formatStatus(winner.payoutStatus, 'Pending')}</p>
           <p className="mt-1 text-sm text-slate-300">Beneficiary: {winner.payoutDetails?.beneficiaryName || winner.name || 'Not added'}</p>
-          <p className="mt-1 text-sm text-slate-300">Phone: {winner.payoutDetails?.phone || 'Not added'}</p>
-          <p className="mt-1 text-sm text-slate-300">UPI: {winner.payoutDetails?.vpa || 'Not added'}</p>
+          <p className="mt-1 text-sm text-slate-300">Payout Email: {winner.payoutDetails?.email || winner.email || 'Not added'}</p>
+          <p className="mt-1 text-sm text-slate-300">Stripe Recipient: {winner.payoutDetails?.stripeRecipientId || 'Not created yet'}</p>
           {!hasPayoutDetails ? (
-            <p className="mt-1 text-xs text-rose-300">User must add beneficiary name, phone, and UPI in profile settings before admin can mark paid.</p>
+            <p className="mt-1 text-xs text-rose-300">User must add beneficiary name and payout email before Stripe can prepare the winner transfer.</p>
           ) : null}
         </div>
 

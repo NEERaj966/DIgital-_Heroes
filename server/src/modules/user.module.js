@@ -102,10 +102,19 @@ const userSchema = new mongoose.Schema(
             beneficiaryName: {
                 type: String
             },
+            email: {
+                type: String
+            },
             phone: {
                 type: String
             },
             vpa: {
+                type: String
+            },
+            stripeRecipientId: {
+                type: String
+            },
+            recipientCountry: {
                 type: String
             }
         },
@@ -149,6 +158,12 @@ const userSchema = new mongoose.Schema(
             },
             failureReason: {
                 type: String
+            },
+            recipientId: {
+                type: String
+            },
+            onboardingRequired: {
+                type: Boolean
             },
             beneficiaryName: {
                 type: String

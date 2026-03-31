@@ -2,9 +2,18 @@ import { createContext, useCallback, useContext, useEffect, useMemo, useState } 
 import { adminApi } from '../utils/api'
 
 const AdminContext = createContext(null)
+const ADMIN_STORAGE_KEY = 'digital-heroes-admin'
+const ADMIN_TOKEN_STORAGE_KEY = 'digital-heroes-admin-token'
 
 const getStoredAdmin = () => {
-  const savedAdmin = localStorage.getItem('digital-heroes-admin')
+  const savedToken = localStorage.getItem(ADMIN_TOKEN_STORAGE_KEY)
+
+  if (!savedToken) {
+    localStorage.removeItem(ADMIN_STORAGE_KEY)
+    return null
+  }
+
+  const savedAdmin = localStorage.getItem(ADMIN_STORAGE_KEY)
 
   if (!savedAdmin) {
     return null
@@ -13,12 +22,13 @@ const getStoredAdmin = () => {
   try {
     return JSON.parse(savedAdmin)
   } catch {
-    localStorage.removeItem('digital-heroes-admin')
+    localStorage.removeItem(ADMIN_STORAGE_KEY)
+    localStorage.removeItem(ADMIN_TOKEN_STORAGE_KEY)
     return null
   }
 }
 
-const getStoredAdminToken = () => localStorage.getItem('digital-heroes-admin-token')
+const getStoredAdminToken = () => localStorage.getItem(ADMIN_TOKEN_STORAGE_KEY)
 
 const AdminProvider = ({ children }) => {
   const [currentAdmin, setCurrentAdmin] = useState(() => {
@@ -31,7 +41,7 @@ const AdminProvider = ({ children }) => {
 
   const persistAdmin = useCallback((admin) => {
     setCurrentAdmin(admin)
-    localStorage.setItem('digital-heroes-admin', JSON.stringify(admin))
+    localStorage.setItem(ADMIN_STORAGE_KEY, JSON.stringify(admin))
   }, [])
 
   const saveAdminSession = useCallback((admin, token) => {
@@ -39,7 +49,7 @@ const AdminProvider = ({ children }) => {
     setAdminSessionNotice('')
 
     if (token) {
-      localStorage.setItem('digital-heroes-admin-token', token)
+      localStorage.setItem(ADMIN_TOKEN_STORAGE_KEY, token)
     }
   }, [persistAdmin])
 
@@ -50,8 +60,8 @@ const AdminProvider = ({ children }) => {
       setAdminSessionNotice('')
     }
 
-    localStorage.removeItem('digital-heroes-admin')
-    localStorage.removeItem('digital-heroes-admin-token')
+    localStorage.removeItem(ADMIN_STORAGE_KEY)
+    localStorage.removeItem(ADMIN_TOKEN_STORAGE_KEY)
   }, [])
 
   const refreshAdminSession = useCallback(async () => {
@@ -94,6 +104,7 @@ const AdminProvider = ({ children }) => {
 
   useEffect(() => {
     if (!getStoredAdminToken()) {
+      setCurrentAdmin(null)
       setIsAdminSessionLoading(false)
       return
     }

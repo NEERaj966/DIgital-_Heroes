@@ -13,8 +13,7 @@ const UserSettingsPage = () => {
     handicap: '',
     avatar: null,
     payoutBeneficiaryName: '',
-    payoutPhone: '',
-    payoutVpa: '',
+    payoutEmail: '',
   })
   const [passwordForm, setPasswordForm] = useState({
     currentPassword: '',
@@ -33,8 +32,7 @@ const UserSettingsPage = () => {
       handicap: currentUser.handicap ?? '',
       avatar: null,
       payoutBeneficiaryName: currentUser.payoutDetails?.beneficiaryName || currentUser.name || '',
-      payoutPhone: currentUser.payoutDetails?.phone || '',
-      payoutVpa: currentUser.payoutDetails?.vpa || '',
+      payoutEmail: currentUser.payoutDetails?.email || currentUser.email || '',
     })
   }, [currentUser])
 
@@ -58,8 +56,7 @@ const UserSettingsPage = () => {
       formData.append('email', profileForm.email)
       formData.append('handicap', profileForm.handicap)
       formData.append('payoutBeneficiaryName', profileForm.payoutBeneficiaryName)
-      formData.append('payoutPhone', profileForm.payoutPhone)
-      formData.append('payoutVpa', profileForm.payoutVpa)
+      formData.append('payoutEmail', profileForm.payoutEmail)
 
       if (profileForm.avatar) {
         formData.append('avatar', profileForm.avatar)
@@ -143,7 +140,7 @@ const UserSettingsPage = () => {
             <div className="rounded-2xl border border-white/10 bg-white/5 p-4">
               <p className="text-xs font-semibold uppercase tracking-[0.22em] text-slate-400">Winner Payout Details</p>
               <p className="mt-2 text-sm text-slate-300">
-                Add the UPI details that should receive your prize money after winner proof is approved.
+                Stripe will use these details to create or update your payout recipient profile before prize money is sent.
               </p>
               <div className="mt-4 grid gap-4 sm:grid-cols-2">
                 <input
@@ -155,19 +152,11 @@ const UserSettingsPage = () => {
                   className={inputClass}
                 />
                 <input
-                  type="tel"
-                  name="payoutPhone"
-                  value={profileForm.payoutPhone}
+                  type="email"
+                  name="payoutEmail"
+                  value={profileForm.payoutEmail}
                   onChange={handleProfileChange}
-                  placeholder="Phone number"
-                  className={inputClass}
-                />
-                <input
-                  type="text"
-                  name="payoutVpa"
-                  value={profileForm.payoutVpa}
-                  onChange={handleProfileChange}
-                  placeholder="UPI ID, for example name@bank"
+                  placeholder="Payout email"
                   className={`${inputClass} sm:col-span-2`}
                 />
               </div>

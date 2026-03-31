@@ -7,15 +7,15 @@ import { uploadOnCloudinary } from '../utils/Cloudinary.js'
 import { getSubscriptionPlanConfig, hasActiveSubscription } from '../constants/subscriptionPlans.js'
 import { Payment } from '../modules/Payment.module.js'
 import { Draw } from '../modules/Draw.module.js'
-import { createRazorpayOrder, getRazorpayKeyId, verifyRazorpaySignature } from '../utils/Razorpay.js'
 import { Score } from '../modules/Score.module.js'
 import { Charity } from '../modules/Charities.module.js'
 import { verifyGoogleToken } from '../utils/googleAuth.js'
 import { applyNormalizedWinnerState, normalizePayoutStatus } from '../utils/winnerState.js'
 import { syncUserSubscriptionFromPayments } from '../utils/subscriptionAccess.js'
+import { createStripeSubscriptionCheckoutSession, retrieveStripeCheckoutSession } from '../utils/stripe.js'
 import {
-    normalizePayoutPhone,
-    normalizePayoutVpa,
+    createWinnerPayoutSetupLink,
+    normalizePayoutEmail,
     syncLatestUserPayout
 } from '../utils/winnerPayout.js'
 
@@ -93,24 +93,79 @@ const trimUserScoresToLatestFive = async (userId) => {
 
 const normalizeEmail = (email) => String(email || '').trim().toLowerCase()
 const normalizeBeneficiaryName = (value) => String(value || '').trim()
+const trimTrailingSlashes = (value) => String(value || '').replace(/\/+$/, '')
 
-const validatePayoutDetails = ({ beneficiaryName, phone, vpa }) => {
-    const normalizedBeneficiaryName = normalizeBeneficiaryName(beneficiaryName)
-    const normalizedPhone = normalizePayoutPhone(phone)
-    const normalizedVpa = normalizePayoutVpa(vpa)
+const getClientAppUrl = (req) => {
+    const configuredUrl = trimTrailingSlashes(process.env.CLIENT_APP_URL || process.env.FRONTEND_URL)
 
-    if (normalizedPhone && !/^\d{10,15}$/.test(normalizedPhone)) {
-        throw new ApiError(400, "Payout phone number must contain 10 to 15 digits")
+    if (/^https?:\/\//i.test(configuredUrl)) {
+        return configuredUrl
     }
 
-    if (normalizedVpa && !/^[a-z0-9.\-_]{2,256}@[a-z]{2,64}$/.test(normalizedVpa)) {
-        throw new ApiError(400, "A valid UPI ID is required for automatic payouts")
+    const requestOrigin = trimTrailingSlashes(req.get('origin'))
+
+    if (/^https?:\/\//i.test(requestOrigin)) {
+        return requestOrigin
+    }
+
+    const referer = String(req.get('referer') || '').trim()
+
+    if (referer) {
+        try {
+            return trimTrailingSlashes(new URL(referer).origin)
+        } catch {
+            // Ignore invalid referer values and fall back to localhost.
+        }
+    }
+
+    return 'http://localhost:5173'
+}
+
+const hasCompletedSubscriptionPayment = async (userId, email) =>
+    Payment.findOne({
+        paymentFor: 'subscription',
+        paymentStatus: 'completed',
+        $or: [{ user: userId }, { customerEmail: normalizeEmail(email) }]
+    }).sort({ createdAt: -1, _id: -1 })
+
+const ensureReusableCheckoutUser = async (user, email) => {
+    if (!user) {
+        return null
+    }
+
+    if (user.role === 'admin') {
+        throw new ApiError(403, 'This email is already linked to an admin account. Please use a different email.')
+    }
+
+    await syncUserSubscriptionFromPayments(user)
+
+    if (hasActiveSubscription(user) || await hasCompletedSubscriptionPayment(user._id, email)) {
+        throw new ApiError(409, 'An active account with this email already exists. Please sign in instead.')
+    }
+
+    return user
+}
+
+const buildCheckoutUrls = (req, subscriptionPlan) => {
+    const clientAppUrl = getClientAppUrl(req)
+
+    return {
+        successUrl: `${clientAppUrl}/signup?checkout=success&session_id={CHECKOUT_SESSION_ID}`,
+        cancelUrl: `${clientAppUrl}/signup?checkout=cancelled&plan=${encodeURIComponent(subscriptionPlan)}`
+    }
+}
+
+const validatePayoutDetails = ({ beneficiaryName, email, fallbackEmail, fallbackBeneficiaryName }) => {
+    const normalizedBeneficiaryName = normalizeBeneficiaryName(beneficiaryName || fallbackBeneficiaryName)
+    const normalizedEmail = normalizePayoutEmail(email || fallbackEmail)
+
+    if (normalizedEmail && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(normalizedEmail)) {
+        throw new ApiError(400, "A valid payout email is required for Stripe winner payouts")
     }
 
     return {
         beneficiaryName: normalizedBeneficiaryName,
-        phone: normalizedPhone,
-        vpa: normalizedVpa
+        email: normalizedEmail
     }
 }
 
@@ -122,49 +177,6 @@ const ensureUserGoogleAccess = (userLikeRecord) => {
     if (userLikeRecord.role === "admin") {
         throw new ApiError(403, "This Google account is linked to an admin profile. Please continue through admin sign in.")
     }
-}
-
-const ensureUserPaymentRecord = async ({
-    email,
-    subscriptionPlan,
-    razorpayOrderId,
-    razorpayPaymentId,
-    razorpaySignature
-}) => {
-    const subscriptionConfig = getSubscriptionPlanConfig(subscriptionPlan.trim())
-
-    if (!subscriptionConfig) {
-        throw new ApiError(400, "A valid subscription plan is required")
-    }
-
-    const paymentRecord = await Payment.findOne({
-        razorpayOrderId: razorpayOrderId.trim(),
-        paymentFor: "subscription",
-        subscriptionPlan: subscriptionConfig.code,
-        customerEmail: email
-    })
-
-    if (!paymentRecord) {
-        throw new ApiError(400, "Subscription payment record not found")
-    }
-
-    if (paymentRecord.amount !== subscriptionConfig.amount || paymentRecord.currency !== subscriptionConfig.currency) {
-        throw new ApiError(400, "Subscription payment does not match the selected plan")
-    }
-
-    const isValidSignature = verifyRazorpaySignature({
-        orderId: razorpayOrderId.trim(),
-        paymentId: razorpayPaymentId.trim(),
-        signature: razorpaySignature.trim()
-    })
-
-    if (!isValidSignature) {
-        paymentRecord.paymentStatus = "failed"
-        await paymentRecord.save()
-        throw new ApiError(400, "Unable to verify Razorpay payment signature")
-    }
-
-    return { paymentRecord, subscriptionConfig }
 }
 
 const uploadAvatarIfPresent = async (req, folder, fallbackAvatar = "") => {
@@ -179,6 +191,204 @@ const uploadAvatarIfPresent = async (req, folder, fallbackAvatar = "") => {
     }
 
     return uploadedAvatar.secure_url
+}
+
+const createStripePaymentRecord = async ({ user, subscriptionConfig, session, customerName, customerEmail }) =>
+    Payment.create({
+        user: user._id,
+        paymentFor: 'subscription',
+        provider: 'stripe',
+        subscriptionPlan: subscriptionConfig.code,
+        amount: subscriptionConfig.amount,
+        currency: subscriptionConfig.currency,
+        paymentMethod: 'stripe',
+        paymentStatus: 'pending',
+        providerSessionId: session.id,
+        providerSubscriptionId: typeof session.subscription === 'string' ? session.subscription : session.subscription?.id,
+        providerCustomerId: typeof session.customer === 'string' ? session.customer : undefined,
+        receipt: `stripe_${Date.now()}_${Math.floor(Math.random() * 100000)}`,
+        customerName,
+        customerEmail
+    })
+
+const upsertPasswordCheckoutUser = async ({ req, subscriptionConfig }) => {
+    const { name, email, password, handicap } = req.body
+
+    if ([name, email, password].some((field) => !field || String(field).trim() === '')) {
+        throw new ApiError(400, 'Name, email, and password are required before starting Stripe checkout')
+    }
+
+    const normalizedEmail = normalizeEmail(email)
+    const existingUser = await ensureReusableCheckoutUser(await User.findOne({ email: normalizedEmail }), normalizedEmail)
+    const avatarUrl = await uploadAvatarIfPresent(req, 'users/avatar', existingUser?.avatar || '')
+
+    if (existingUser) {
+        existingUser.name = name.trim()
+        existingUser.email = normalizedEmail
+        existingUser.password = password.trim()
+        existingUser.authProvider = 'password'
+        existingUser.avatar = avatarUrl
+        existingUser.handicap = handicap
+        existingUser.subscription = {
+            planCode: subscriptionConfig.code,
+            billingCycle: subscriptionConfig.billingCycle,
+            status: 'inactive',
+            subscribedAt: undefined
+        }
+        await existingUser.save()
+        return existingUser
+    }
+
+    return User.create({
+        name: name.trim(),
+        email: normalizedEmail,
+        password: password.trim(),
+        role: 'player',
+        authProvider: 'password',
+        avatar: avatarUrl,
+        handicap,
+        subscription: {
+            planCode: subscriptionConfig.code,
+            billingCycle: subscriptionConfig.billingCycle,
+            status: 'inactive'
+        }
+    })
+}
+
+const upsertGoogleCheckoutUser = async ({ req, subscriptionConfig }) => {
+    const { googleToken, name, handicap } = req.body
+
+    if (!googleToken || !String(googleToken).trim()) {
+        throw new ApiError(400, 'Google credential is required')
+    }
+
+    const googleProfile = await verifyGoogleToken(googleToken)
+    const conflictingAdmin = await User.findOne({
+        role: 'admin',
+        $or: [{ googleId: googleProfile.googleId }, { email: googleProfile.email }]
+    })
+
+    ensureUserGoogleAccess(conflictingAdmin)
+
+    const existingUser = await ensureReusableCheckoutUser(
+        await User.findOne({
+            role: { $ne: 'admin' },
+            $or: [{ googleId: googleProfile.googleId }, { email: googleProfile.email }]
+        }),
+        googleProfile.email
+    )
+    const avatarUrl = await uploadAvatarIfPresent(req, 'users/avatar', existingUser?.avatar || googleProfile.avatar)
+
+    if (existingUser) {
+        existingUser.name = String(name || '').trim() || googleProfile.name
+        existingUser.email = googleProfile.email
+        existingUser.authProvider = 'google'
+        existingUser.googleId = googleProfile.googleId
+        existingUser.avatar = avatarUrl
+        existingUser.handicap = handicap
+        existingUser.subscription = {
+            planCode: subscriptionConfig.code,
+            billingCycle: subscriptionConfig.billingCycle,
+            status: 'inactive',
+            subscribedAt: undefined
+        }
+        await existingUser.save()
+        return existingUser
+    }
+
+    return User.create({
+        name: String(name || '').trim() || googleProfile.name,
+        email: googleProfile.email,
+        role: 'player',
+        authProvider: 'google',
+        googleId: googleProfile.googleId,
+        avatar: avatarUrl,
+        handicap,
+        subscription: {
+            planCode: subscriptionConfig.code,
+            billingCycle: subscriptionConfig.billingCycle,
+            status: 'inactive'
+        }
+    })
+}
+
+const finalizeStripeSubscriptionForUser = async (sessionId) => {
+    const normalizedSessionId = String(sessionId || '').trim()
+
+    if (!normalizedSessionId) {
+        throw new ApiError(400, 'Stripe session ID is required')
+    }
+
+    const paymentRecord = await Payment.findOne({
+        provider: 'stripe',
+        providerSessionId: normalizedSessionId,
+        paymentFor: 'subscription'
+    })
+
+    if (!paymentRecord) {
+        throw new ApiError(404, 'Stripe payment session was not found')
+    }
+
+    const stripeSession = await retrieveStripeCheckoutSession(normalizedSessionId)
+
+    if (stripeSession.status === 'expired') {
+        paymentRecord.paymentStatus = 'failed'
+        await paymentRecord.save()
+        throw new ApiError(400, 'Stripe checkout session expired before payment was completed')
+    }
+
+    if (stripeSession.payment_status !== 'paid') {
+        throw new ApiError(400, 'Stripe payment has not been completed yet')
+    }
+
+    const user = await User.findById(paymentRecord.user)
+
+    if (!user) {
+        throw new ApiError(404, 'User not found for this payment session')
+    }
+
+    const sessionUserId = stripeSession.metadata?.userId
+
+    if (sessionUserId && String(user._id) !== String(sessionUserId)) {
+        throw new ApiError(400, 'Stripe session does not match the expected user')
+    }
+
+    const subscriptionConfig = getSubscriptionPlanConfig(paymentRecord.subscriptionPlan)
+
+    if (!subscriptionConfig) {
+        throw new ApiError(400, 'A valid subscription plan is required')
+    }
+
+    paymentRecord.paymentStatus = 'completed'
+    paymentRecord.amount = Number.isFinite(Number(stripeSession.amount_total))
+        ? Number(stripeSession.amount_total)
+        : paymentRecord.amount
+    paymentRecord.currency = String(stripeSession.currency || paymentRecord.currency || 'INR').toUpperCase()
+    paymentRecord.transactionId =
+        (typeof stripeSession.subscription === 'string' ? stripeSession.subscription : stripeSession.subscription?.id) ||
+        stripeSession.payment_intent ||
+        normalizedSessionId
+    paymentRecord.providerPaymentIntentId =
+        typeof stripeSession.payment_intent === 'string'
+            ? stripeSession.payment_intent
+            : paymentRecord.providerPaymentIntentId
+    paymentRecord.providerSubscriptionId =
+        (typeof stripeSession.subscription === 'string' ? stripeSession.subscription : stripeSession.subscription?.id) ||
+        paymentRecord.providerSubscriptionId
+    paymentRecord.providerCustomerId =
+        (typeof stripeSession.customer === 'string' ? stripeSession.customer : paymentRecord.providerCustomerId) ||
+        paymentRecord.providerCustomerId
+    await paymentRecord.save()
+
+    user.subscription = {
+        planCode: subscriptionConfig.code,
+        billingCycle: subscriptionConfig.billingCycle,
+        status: 'active',
+        subscribedAt: stripeSession.created ? new Date(Number(stripeSession.created) * 1000) : new Date()
+    }
+    await user.save()
+
+    return user
 }
 
 const linkGoogleIdentityToUser = async (user, googleProfile) => {
@@ -211,183 +421,98 @@ const linkGoogleIdentityToUser = async (user, googleProfile) => {
     return user
 }
 
-const createSubscriptionOrder = asyncHandler(async (req, res) => {
-    const { name, email, subscriptionPlan } = req.body
+const createSubscriptionCheckoutSession = asyncHandler(async (req, res) => {
+    const normalizedPlan = String(req.body?.subscriptionPlan || '').trim()
 
-    if ([name, email, subscriptionPlan].some((field) => !field || field.trim() === "")) {
-        throw new ApiError(400, "Name, email, and subscription plan are required")
+    if (!normalizedPlan) {
+        throw new ApiError(400, 'Subscription plan is required')
     }
 
-    const subscriptionConfig = getSubscriptionPlanConfig(subscriptionPlan.trim())
+    const subscriptionConfig = getSubscriptionPlanConfig(normalizedPlan)
 
     if (!subscriptionConfig) {
-        throw new ApiError(400, "A valid subscription plan is required")
+        throw new ApiError(400, 'A valid subscription plan is required')
     }
 
-    const normalizedEmail = normalizeEmail(email)
-    const existedUser = await User.findOne({ email: normalizedEmail })
-
-    if (existedUser) {
-        throw new ApiError(409, "A user with this email already exists. Please sign in instead.")
-    }
-
-    const receipt = `sub_${Date.now()}_${Math.floor(Math.random() * 100000)}`
-    const razorpayOrder = await createRazorpayOrder({
-        amount: subscriptionConfig.amount,
-        currency: subscriptionConfig.currency,
-        receipt,
-        notes: {
-            subscriptionPlan: subscriptionConfig.code,
-            customerEmail: normalizedEmail
-        }
+    const user = await upsertPasswordCheckoutUser({ req, subscriptionConfig })
+    const { successUrl, cancelUrl } = buildCheckoutUrls(req, subscriptionConfig.code)
+    const stripeSession = await createStripeSubscriptionCheckoutSession({
+        customerEmail: user.email,
+        customerName: user.name,
+        subscriptionPlan: subscriptionConfig.code,
+        userId: user._id,
+        successUrl,
+        cancelUrl
     })
 
-    await Payment.create({
-        paymentFor: "subscription",
-        subscriptionPlan: subscriptionConfig.code,
-        amount: subscriptionConfig.amount,
-        currency: subscriptionConfig.currency,
-        paymentStatus: "pending",
-        razorpayOrderId: razorpayOrder.id,
-        receipt,
-        customerName: name.trim(),
-        customerEmail: normalizedEmail
+    await createStripePaymentRecord({
+        user,
+        subscriptionConfig,
+        session: stripeSession,
+        customerName: user.name,
+        customerEmail: user.email
     })
 
     return res.status(201).json(
         new ApiResponse(
             201,
             {
-                keyId: getRazorpayKeyId(),
-                order: razorpayOrder,
-                subscription: subscriptionConfig
+                checkoutUrl: stripeSession.url,
+                sessionId: stripeSession.id
             },
-            "Subscription order created successfully"
+            'Stripe checkout session created successfully'
         )
     )
 })
 
-const registerUser = asyncHandler(async (req, res) => {
-    const {
-        name,
-        email,
-        password,
-        role,
-        handicap,
-        subscriptionPlan,
-        razorpayOrderId,
-        razorpayPaymentId,
-        razorpaySignature
-    } = req.body
+const createGoogleSubscriptionCheckoutSession = asyncHandler(async (req, res) => {
+    const normalizedPlan = String(req.body?.subscriptionPlan || '').trim()
 
-    if ([name, email, password, subscriptionPlan, razorpayOrderId, razorpayPaymentId, razorpaySignature].some((field) => !field || field.trim() === "")) {
-        throw new ApiError(400, "All fields are required")
+    if (!normalizedPlan) {
+        throw new ApiError(400, 'Subscription plan is required')
     }
 
-    const normalizedEmail = normalizeEmail(email)
-    const existedUser = await User.findOne({ email: normalizedEmail })
+    const subscriptionConfig = getSubscriptionPlanConfig(normalizedPlan)
 
-    if (existedUser) {
-        throw new ApiError(409, "User with email or username already exists")
+    if (!subscriptionConfig) {
+        throw new ApiError(400, 'A valid subscription plan is required')
     }
 
-    const { paymentRecord, subscriptionConfig } = await ensureUserPaymentRecord({
-        email: normalizedEmail,
-        subscriptionPlan,
-        razorpayOrderId,
-        razorpayPaymentId,
-        razorpaySignature
+    const user = await upsertGoogleCheckoutUser({ req, subscriptionConfig })
+    const { successUrl, cancelUrl } = buildCheckoutUrls(req, subscriptionConfig.code)
+    const stripeSession = await createStripeSubscriptionCheckoutSession({
+        customerEmail: user.email,
+        customerName: user.name,
+        subscriptionPlan: subscriptionConfig.code,
+        userId: user._id,
+        successUrl,
+        cancelUrl
     })
 
-    const avatarUrl = await uploadAvatarIfPresent(req, "users/avatar")
-
-    const user = await User.create({
-        name: name.trim(),
-        email: normalizedEmail,
-        password: password.trim(),
-        role,
-        authProvider: "password",
-        avatar: avatarUrl,
-        handicap,
-        subscription: {
-            planCode: subscriptionConfig.code,
-            billingCycle: subscriptionConfig.billingCycle,
-            status: "active",
-            subscribedAt: new Date()
-        }
+    await createStripePaymentRecord({
+        user,
+        subscriptionConfig,
+        session: stripeSession,
+        customerName: user.name,
+        customerEmail: user.email
     })
 
-    paymentRecord.user = user._id
-    paymentRecord.paymentStatus = "completed"
-    paymentRecord.transactionId = razorpayPaymentId.trim()
-    paymentRecord.razorpayPaymentId = razorpayPaymentId.trim()
-    await paymentRecord.save()
-
-    return respondWithUserSession(res, user, "User registered successfully", 201)
+    return res.status(201).json(
+        new ApiResponse(
+            201,
+            {
+                checkoutUrl: stripeSession.url,
+                sessionId: stripeSession.id
+            },
+            'Stripe checkout session created successfully'
+        )
+    )
 })
 
-const googleRegisterUser = asyncHandler(async (req, res) => {
-    const {
-        googleToken,
-        name,
-        handicap,
-        subscriptionPlan,
-        razorpayOrderId,
-        razorpayPaymentId,
-        razorpaySignature
-    } = req.body
-
-    if ([googleToken, subscriptionPlan, razorpayOrderId, razorpayPaymentId, razorpaySignature].some((field) => !field || String(field).trim() === "")) {
-        throw new ApiError(400, "Google credential, subscription plan, and payment details are required")
-    }
-
-    const googleProfile = await verifyGoogleToken(googleToken)
-    const existedUser = await User.findOne({
-        $or: [
-            { email: googleProfile.email },
-            { googleId: googleProfile.googleId }
-        ]
-    })
-
-    ensureUserGoogleAccess(existedUser)
-
-    if (existedUser) {
-        throw new ApiError(409, "An account with this Google email already exists. Please sign in instead.")
-    }
-
-    const { paymentRecord, subscriptionConfig } = await ensureUserPaymentRecord({
-        email: googleProfile.email,
-        subscriptionPlan,
-        razorpayOrderId,
-        razorpayPaymentId,
-        razorpaySignature
-    })
-
-    const avatarUrl = await uploadAvatarIfPresent(req, "users/avatar", googleProfile.avatar)
-
-    const user = await User.create({
-        name: String(name || '').trim() || googleProfile.name,
-        email: googleProfile.email,
-        role: "player",
-        authProvider: "google",
-        googleId: googleProfile.googleId,
-        avatar: avatarUrl,
-        handicap,
-        subscription: {
-            planCode: subscriptionConfig.code,
-            billingCycle: subscriptionConfig.billingCycle,
-            status: "active",
-            subscribedAt: new Date()
-        }
-    })
-
-    paymentRecord.user = user._id
-    paymentRecord.paymentStatus = "completed"
-    paymentRecord.transactionId = razorpayPaymentId.trim()
-    paymentRecord.razorpayPaymentId = razorpayPaymentId.trim()
-    await paymentRecord.save()
-
-    return respondWithUserSession(res, user, "User registered with Google successfully", 201)
+const confirmSubscriptionCheckout = asyncHandler(async (req, res) => {
+    const { sessionId } = req.body
+    const user = await finalizeStripeSubscriptionForUser(sessionId)
+    return respondWithUserSession(res, user, 'Stripe payment verified successfully', 200)
 })
 
 const loginUser = asyncHandler(async (req, res) =>{
@@ -555,8 +680,7 @@ const updateUserProfile = asyncHandler(async (req, res) => {
         handicap,
         email,
         payoutBeneficiaryName,
-        payoutPhone,
-        payoutVpa
+        payoutEmail
     } = req.body
 
     const user = await User.findById(req.user?._id)
@@ -592,17 +716,18 @@ const updateUserProfile = asyncHandler(async (req, res) => {
         user.handicap = handicap
     }
 
-    if ([payoutBeneficiaryName, payoutPhone, payoutVpa].some((field) => field !== undefined)) {
+    if ([payoutBeneficiaryName, payoutEmail].some((field) => field !== undefined)) {
         const payoutDetails = validatePayoutDetails({
             beneficiaryName: payoutBeneficiaryName !== undefined ? payoutBeneficiaryName : user.payoutDetails?.beneficiaryName,
-            phone: payoutPhone !== undefined ? payoutPhone : user.payoutDetails?.phone,
-            vpa: payoutVpa !== undefined ? payoutVpa : user.payoutDetails?.vpa
+            email: payoutEmail !== undefined ? payoutEmail : user.payoutDetails?.email,
+            fallbackEmail: email !== undefined ? normalizeEmail(email) : user.email,
+            fallbackBeneficiaryName: user.name
         })
 
         user.payoutDetails = {
+            ...(user.payoutDetails || {}),
             beneficiaryName: payoutDetails.beneficiaryName,
-            phone: payoutDetails.phone,
-            vpa: payoutDetails.vpa
+            email: payoutDetails.email
         }
     }
 
@@ -621,6 +746,40 @@ const updateUserProfile = asyncHandler(async (req, res) => {
                 200,
                 updatedUser,
                 "User profile updated Successfully"
+            )
+        )
+})
+
+const createUserWinnerPayoutSetupLink = asyncHandler(async (req, res) => {
+    const user = await User.findById(req.user?._id)
+
+    if (!user) {
+        throw new ApiError(404, "User not found")
+    }
+
+    const clientAppUrl = getClientAppUrl(req)
+    const returnUrl = `${clientAppUrl}/profile/winnings?payoutSetup=success`
+    const refreshUrl = `${clientAppUrl}/profile/winnings?payoutSetup=retry`
+
+    const payoutSetup = await createWinnerPayoutSetupLink(user, {
+        returnUrl,
+        refreshUrl
+    })
+
+    const updatedUser = await getUserPublicProfile(user._id)
+
+    return res
+        .status(200)
+        .json(
+            new ApiResponse(
+                200,
+                {
+                    url: payoutSetup.url,
+                    expiresAt: payoutSetup.expiresAt,
+                    recipientId: payoutSetup.recipientId,
+                    user: updatedUser
+                },
+                payoutSetup.message
             )
         )
 })
@@ -841,9 +1000,9 @@ const logoutUser = asyncHandler(async (req, res) => {
 })
 
 export {
-    createSubscriptionOrder,
-    registerUser,
-    googleRegisterUser,
+    createSubscriptionCheckoutSession,
+    createGoogleSubscriptionCheckoutSession,
+    confirmSubscriptionCheckout,
     loginUser,
     googleLoginUser,
     logoutUser,
@@ -853,6 +1012,7 @@ export {
     getAvailableCharities,
     updateUserCharityPreference,
     uploadWinnerProof,
+    createUserWinnerPayoutSetupLink,
     getUserDrawResults,
     getUserScores,
     createUserScore,

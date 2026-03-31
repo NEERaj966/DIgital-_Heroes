@@ -63,7 +63,7 @@ const UserWinnerProofPage = () => {
   return (
     <UserPageShell
       title="Winner Proof"
-      description="Winners can upload a screenshot from the golf platform here for verification. Once admin approves it, the app can start the payout to your saved UPI ID."
+      description="Winners can upload a screenshot from the golf platform here for verification. Once admin approves it, the app can continue the Stripe payout setup and transfer flow."
     >
       <section className="grid gap-6 lg:grid-cols-[0.9fr_1.1fr]">
         <div className={panelClass}>
@@ -77,7 +77,7 @@ const UserWinnerProofPage = () => {
               : 'No proof uploaded yet.'}
           </p>
           <p className="mt-4 text-sm text-slate-300">
-            Upload a screenshot of your score from the golf platform. Admin will review it and either approve or reject the submission before your saved payout details are used for the prize transfer.
+            Upload a screenshot of your score from the golf platform. Admin will review it and either approve or reject the submission before your Stripe payout details are used for the prize transfer.
           </p>
           {currentUser?.winnerProof?.proofUrl ? (
             <a href={currentUser.winnerProof.proofUrl} target="_blank" rel="noreferrer" className="mt-4 inline-flex text-sm font-medium text-amber-300">

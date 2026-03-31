@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react'
 import { useUser } from '../context/UserContext'
 import { userApi } from '../utils/api'
 import { formatSubscriptionStatus } from '../constants/subscriptionPlans'
-import UserPageShell, { panelClass } from './UserPageShell'
+import UserPageShell, { MessageBanner, panelClass } from './UserPageShell'
 
 const formatStatus = (value, fallback = 'Not Eligible Yet') =>
   value
@@ -31,9 +31,10 @@ const formatMonthLabel = (drawMonth) => {
 }
 
 const UserWinningsPage = () => {
-  const { currentUser } = useUser()
+  const { currentUser, refreshUserSession } = useUser()
   const [scoreCount, setScoreCount] = useState(0)
   const [drawResults, setDrawResults] = useState([])
+  const [payoutSetupState, setPayoutSetupState] = useState({ saving: false, message: '', type: '' })
 
   useEffect(() => {
     const loadSummary = async () => {
@@ -53,6 +54,62 @@ const UserWinningsPage = () => {
 
     loadSummary()
   }, [])
+
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search)
+    const setupStatus = params.get('payoutSetup')
+
+    if (!setupStatus) {
+      return
+    }
+
+    if (setupStatus === 'success') {
+      refreshUserSession().catch(() => null)
+      setPayoutSetupState({
+        saving: false,
+        message: 'Stripe payout setup was updated. Refreshing your latest winner status now.',
+        type: 'success',
+      })
+    } else if (setupStatus === 'retry') {
+      setPayoutSetupState({
+        saving: false,
+        message: 'That Stripe payout link expired or was already used. Start payout setup again to continue.',
+        type: 'error',
+      })
+    }
+
+    const nextUrl = new URL(window.location.href)
+    nextUrl.searchParams.delete('payoutSetup')
+    window.history.replaceState({}, '', `${nextUrl.pathname}${nextUrl.search}${nextUrl.hash}`)
+  }, [refreshUserSession])
+
+  const handleStartPayoutSetup = async () => {
+    setPayoutSetupState({ saving: true, message: '', type: '' })
+
+    try {
+      const response = await userApi.post('/users/winner-payout/setup-link')
+      const checkoutUrl = response.data?.data?.url
+
+      if (!checkoutUrl) {
+        throw new Error('Stripe payout setup URL is not available right now.')
+      }
+
+      window.location.assign(checkoutUrl)
+    } catch (error) {
+      setPayoutSetupState({
+        saving: false,
+        message: error.response?.data?.message || error.message || 'Unable to start Stripe payout setup right now.',
+        type: 'error',
+      })
+    }
+  }
+
+  const payoutRecipientEmail = currentUser?.payoutDetails?.email || currentUser?.email || 'Not added yet'
+  const hasOutstandingWinnings = Number(currentUser?.totalWinnings || 0) > 0
+  const shouldShowPayoutSetupButton = hasOutstandingWinnings && currentUser?.payoutStatus !== 'paid'
+  const isPayoutSetupIncomplete =
+    currentUser?.latestPayout?.status === 'action_required' ||
+    (hasOutstandingWinnings && !currentUser?.payoutDetails?.stripeRecipientId)
 
   const cards = [
     ['Subscription', formatSubscriptionStatus(currentUser?.subscription?.status)],
@@ -83,13 +140,33 @@ const UserWinningsPage = () => {
           <h2 className="mt-2 text-2xl font-semibold text-white">Prize transfer status</h2>
           <div className="mt-5 grid gap-4">
             <div className="rounded-2xl border border-white/10 bg-white/5 p-4">
-              <p className="text-xs font-semibold uppercase tracking-[0.22em] text-slate-400">UPI Destination</p>
-              <p className="mt-2 text-lg font-semibold text-white">{currentUser?.payoutDetails?.vpa || 'Not added yet'}</p>
+              <p className="text-xs font-semibold uppercase tracking-[0.22em] text-slate-400">Stripe Recipient</p>
+              <p className="mt-2 text-lg font-semibold text-white">{payoutRecipientEmail}</p>
               <p className="mt-2 text-sm text-slate-300">
-                {currentUser?.payoutDetails?.vpa
-                  ? `Beneficiary: ${currentUser?.payoutDetails?.beneficiaryName || currentUser?.name || 'Not set'}`
-                  : 'Add your beneficiary name, phone number, and UPI ID in Profile Settings to receive prize money automatically after proof approval.'}
+                Beneficiary: {currentUser?.payoutDetails?.beneficiaryName || currentUser?.name || 'Not set'}
               </p>
+              <p className="mt-2 text-sm text-slate-300">
+                {currentUser?.payoutDetails?.stripeRecipientId
+                  ? `Recipient ID: ${currentUser.payoutDetails.stripeRecipientId}`
+                  : 'Stripe recipient setup has not been completed yet.'}
+              </p>
+              {shouldShowPayoutSetupButton ? (
+                <div className="mt-4 space-y-3">
+                  <MessageBanner state={payoutSetupState} />
+                  <button
+                    type="button"
+                    onClick={handleStartPayoutSetup}
+                    disabled={payoutSetupState.saving}
+                    className="inline-flex items-center justify-center rounded-full border border-white/15 bg-white/5 px-5 py-2.5 text-sm font-semibold text-white disabled:cursor-not-allowed disabled:opacity-60"
+                  >
+                    {payoutSetupState.saving
+                      ? 'Opening Stripe...'
+                      : isPayoutSetupIncomplete
+                        ? 'Complete Stripe Payout Setup'
+                        : 'Update Stripe Payout Setup'}
+                  </button>
+                </div>
+              ) : null}
             </div>
 
             <div className="rounded-2xl border border-white/10 bg-white/5 p-4">
