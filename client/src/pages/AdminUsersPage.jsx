@@ -174,7 +174,7 @@ const AdminUsersPage = () => {
                 </div>
                 <p className="text-sm text-slate-300">Sign-in method: {selectedUser.authProvider === 'google' ? 'Google' : 'Email and password'}</p>
                 <AdminMessageBanner state={pageState} />
-                <button type="submit" disabled={pageState.saving} className="inline-flex w-fit rounded-full bg-gradient-to-r from-amber-300 via-orange-400 to-rose-500 px-6 py-3 text-sm font-semibold text-slate-950">
+                <button type="submit" disabled={pageState.saving} className="inline-flex w-full justify-center rounded-full bg-gradient-to-r from-amber-300 via-orange-400 to-rose-500 px-6 py-3 text-sm font-semibold text-slate-950 sm:w-fit">
                   {pageState.saving ? 'Saving...' : 'Save User'}
                 </button>
               </form>

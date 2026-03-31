@@ -109,7 +109,7 @@ const UserScoresPage = () => {
               <input type="date" name="playedAt" required value={scoreForm.playedAt} onChange={handleChange} className={inputClass} />
             </div>
             <MessageBanner state={scoresState} />
-            <div className="flex gap-3">
+            <div className="flex flex-col gap-3 sm:flex-row">
               <button type="submit" disabled={scoresState.saving} className="inline-flex items-center justify-center rounded-full bg-gradient-to-r from-amber-300 via-orange-400 to-rose-500 px-6 py-3 text-sm font-semibold text-slate-950">
                 {scoresState.saving ? 'Saving...' : editingScoreId ? 'Update Score' : 'Add Score'}
               </button>
@@ -129,7 +129,7 @@ const UserScoresPage = () => {
             <div className="space-y-4">
               {scores.map((scoreItem) => (
                 <div key={scoreItem._id} className="rounded-2xl border border-white/10 bg-white/5 p-4">
-                  <div className="flex items-center justify-between gap-4">
+                  <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
                     <div>
                       <p className="text-lg font-semibold text-white">{scoreItem.stablefordScore} Stableford</p>
                       <p className="mt-1 text-sm text-slate-300">{new Date(scoreItem.playedAt).toLocaleDateString()}</p>

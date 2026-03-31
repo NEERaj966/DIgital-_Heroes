@@ -104,7 +104,7 @@ const AdminWinnerRow = ({ winner, onSave }) => {
           ) : null}
         </div>
 
-        <div className="grid gap-3 sm:grid-cols-3 lg:w-[540px]">
+        <div className="grid w-full gap-3 sm:grid-cols-3 lg:max-w-[540px]">
           <select value={winnerProofStatus} onChange={(event) => setWinnerProofStatus(event.target.value)} className={adminInputClass}>
             <option value="not_submitted" className="bg-slate-900 text-white">not_submitted</option>
             <option value="pending" className="bg-slate-900 text-white">pending</option>

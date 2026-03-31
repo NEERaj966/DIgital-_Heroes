@@ -130,14 +130,14 @@ const AdminSignIn = () => {
       whileInView="show"
       viewport={{ once: true, amount: 0.2 }}
       variants={cardVariants}
-      className="signin-card relative overflow-hidden rounded-[34px] border border-white/10 p-8 sm:p-10"
+      className="signin-card relative overflow-hidden rounded-[34px] border border-white/10 p-5 sm:p-8 sm:py-10"
     >
       <div className="relative z-10">
-        <p className="mb-3 text-sm font-semibold uppercase tracking-[0.35em] text-amber-300">
+        <p className="mb-3 text-xs font-semibold uppercase tracking-[0.24em] text-amber-300 sm:text-sm sm:tracking-[0.35em]">
           Admin Sign In
         </p>
-        <h2 className="text-3xl font-semibold text-white">Admin access panel.</h2>
-        <p className="mt-4 text-base leading-8 text-slate-300">
+        <h2 className="text-2xl font-semibold text-white sm:text-3xl">Admin access panel.</h2>
+        <p className="mt-4 text-sm leading-7 text-slate-300 sm:text-base sm:leading-8">
           Sign in as an administrator to manage users, payments, donations, and platform activity.
         </p>
       </div>
@@ -153,7 +153,7 @@ const AdminSignIn = () => {
           <input type="password" name="password" value={form.password} onChange={handleChange} placeholder="Enter admin password" className={inputClassName} />
         </motion.div>
 
-        <div className="flex items-center justify-between gap-4 py-1 text-sm text-slate-400">
+        <div className="flex flex-col items-start gap-3 py-1 text-sm text-slate-400 sm:flex-row sm:items-center sm:justify-between">
           <Link to="/admin/signup" className="text-amber-300 transition hover:text-amber-200">
             Create admin account
           </Link>
@@ -179,7 +179,7 @@ const AdminSignIn = () => {
           whileHover={{ y: -3, scale: 1.01 }}
           whileTap={{ scale: 0.98 }}
           disabled={state.loading}
-          className="mt-2 inline-flex items-center justify-center rounded-full border border-amber-300/30 bg-white/10 px-6 py-3 text-sm font-semibold text-white shadow-[0_18px_36px_rgba(15,23,42,0.2)] backdrop-blur-md"
+          className="mt-2 inline-flex w-full items-center justify-center rounded-full border border-amber-300/30 bg-white/10 px-6 py-3 text-sm font-semibold text-white shadow-[0_18px_36px_rgba(15,23,42,0.2)] backdrop-blur-md sm:w-auto"
         >
           {state.loading ? 'Signing In...' : 'Admin Sign In'}
         </motion.button>

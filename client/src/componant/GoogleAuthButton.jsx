@@ -22,7 +22,7 @@ const GoogleAuthButton = ({ onCredential, onError, contextLabel = 'continue', bu
     }
 
     const updateWidth = () => {
-      const nextWidth = Math.max(240, Math.min(shellRef.current?.offsetWidth || 320, 420))
+      const nextWidth = Math.max(200, Math.min(shellRef.current?.offsetWidth || 320, 420))
       setState((prev) => (prev.width === nextWidth ? prev : { ...prev, width: nextWidth }))
     }
 
@@ -105,18 +105,18 @@ const GoogleAuthButton = ({ onCredential, onError, contextLabel = 'continue', bu
   }, [buttonText, state.width])
 
   return (
-    <div className="relative overflow-hidden rounded-[28px] border border-white/10 bg-[linear-gradient(145deg,rgba(255,255,255,0.08),rgba(255,255,255,0.03))] p-5 shadow-[0_18px_48px_rgba(15,23,42,0.22)]">
+    <div className="relative overflow-hidden rounded-[28px] border border-white/10 bg-[linear-gradient(145deg,rgba(255,255,255,0.08),rgba(255,255,255,0.03))] p-4 sm:p-5 shadow-[0_18px_48px_rgba(15,23,42,0.22)]">
       <div className="absolute inset-x-6 top-0 h-px bg-gradient-to-r from-transparent via-amber-300/80 to-transparent" />
       <div className="absolute -right-10 top-5 h-20 w-20 rounded-full bg-amber-300/10 blur-3xl" />
       <div className="absolute -left-8 bottom-4 h-16 w-16 rounded-full bg-white/6 blur-3xl" />
 
       <div className="relative z-10">
-        <div className="flex items-center justify-between gap-4">
+        <div className="flex flex-col items-start gap-3 sm:flex-row sm:items-center sm:justify-between">
           <div>
-            <p className="text-xs font-semibold uppercase tracking-[0.32em] text-amber-300">Google {contextLabel}</p>
+            <p className="text-xs font-semibold uppercase tracking-[0.24em] text-amber-300 sm:tracking-[0.32em]">Google {contextLabel}</p>
             <h3 className="mt-2 text-lg font-semibold text-white">Use your Google account</h3>
           </div>
-          <div className="rounded-full border border-white/10 bg-white/5 px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.24em] text-slate-300">
+          <div className="rounded-full border border-white/10 bg-white/5 px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-300 sm:tracking-[0.24em]">
             Fast Access
           </div>
         </div>

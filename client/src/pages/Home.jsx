@@ -158,20 +158,20 @@ const Home = () => {
 
   return (
     <motion.div initial="hidden" animate="show" variants={sectionVariants} className="space-y-8">
-      <motion.section variants={sectionVariants} className="hero-panel rounded-[36px] border border-white/10 px-6 py-16 shadow-[0_30px_100px_rgba(15,23,42,0.45)] sm:px-10">
-        <motion.p variants={itemVariants} className="mb-4 text-sm font-semibold uppercase tracking-[0.35em] text-amber-300">
+      <motion.section variants={sectionVariants} className="hero-panel rounded-[28px] border border-white/10 px-5 py-10 shadow-[0_30px_100px_rgba(15,23,42,0.45)] sm:rounded-[36px] sm:px-10 sm:py-16">
+        <motion.p variants={itemVariants} className="mb-4 text-xs font-semibold uppercase tracking-[0.24em] text-amber-300 sm:text-sm sm:tracking-[0.35em]">
           Charity Golf Platform
         </motion.p>
-        <motion.h1 variants={itemVariants} className="max-w-4xl text-4xl font-semibold leading-tight text-white sm:text-6xl">
+        <motion.h1 variants={itemVariants} className="max-w-4xl text-3xl font-semibold leading-tight text-white sm:text-5xl lg:text-6xl">
           Play with purpose, support charities, and join a monthly score-based draw.
         </motion.h1>
-        <motion.p variants={itemVariants} className="mt-6 max-w-3xl text-base leading-8 text-slate-300 sm:text-lg">
+        <motion.p variants={itemVariants} className="mt-6 max-w-3xl text-sm leading-7 text-slate-300 sm:text-lg sm:leading-8">
           This website connects subscribed golf players, charity selection, draw management, and winner verification into one platform with a clear admin and user workflow.
         </motion.p>
 
         <div className="mt-10 grid gap-6 lg:grid-cols-[1.1fr_0.9fr]">
-          <motion.div variants={itemVariants} className="rounded-[28px] border border-white/10 bg-white/5 p-6">
-            <p className="text-sm font-semibold uppercase tracking-[0.28em] text-amber-300">Public Visitor</p>
+          <motion.div variants={itemVariants} className="rounded-[28px] border border-white/10 bg-white/5 p-5 sm:p-6">
+            <p className="text-xs font-semibold uppercase tracking-[0.2em] text-amber-300 sm:text-sm sm:tracking-[0.28em]">Public Visitor</p>
             <motion.div variants={sectionVariants} className="mt-5 space-y-4">
               {visitorHighlights.map((item) => (
                 <motion.div
@@ -187,9 +187,9 @@ const Home = () => {
             </motion.div>
           </motion.div>
 
-          <motion.div variants={itemVariants} whileHover={cardHover} className="flex flex-col justify-between gap-6 rounded-[28px] border border-white/10 bg-white/5 p-6">
+          <motion.div variants={itemVariants} whileHover={cardHover} className="flex flex-col justify-between gap-6 rounded-[28px] border border-white/10 bg-white/5 p-5 sm:p-6">
             <div>
-              <p className="text-sm font-semibold uppercase tracking-[0.28em] text-amber-300">Get Started</p>
+              <p className="text-xs font-semibold uppercase tracking-[0.2em] text-amber-300 sm:text-sm sm:tracking-[0.28em]">Get Started</p>
               <p className="mt-4 text-sm leading-7 text-slate-300">
                 Visitors can review the platform model first, then move into the subscription and account-creation path when ready.
               </p>
@@ -197,11 +197,11 @@ const Home = () => {
             <div className="rounded-[24px] border border-white/10 bg-slate-950/45 p-5">
               <p className="text-sm text-slate-300">Start by choosing a subscription plan, then create an account to access the player features.</p>
             </div>
-            <motion.div variants={sectionVariants} className="flex flex-wrap gap-3">
+            <motion.div variants={sectionVariants} className="flex flex-col gap-3 sm:flex-row sm:flex-wrap">
               <motion.div variants={itemVariants} whileHover={{ y: -2 }} whileTap={{ scale: 0.98 }}>
                 <Link
                   to="/subscription"
-                  className="rounded-full bg-gradient-to-r from-amber-300 via-orange-400 to-rose-500 px-6 py-3 text-sm font-semibold text-slate-950"
+                  className="inline-flex w-full items-center justify-center rounded-full bg-gradient-to-r from-amber-300 via-orange-400 to-rose-500 px-6 py-3 text-sm font-semibold text-slate-950 sm:w-auto"
                 >
                   Start Subscription
                 </Link>
@@ -209,7 +209,7 @@ const Home = () => {
               <motion.div variants={itemVariants} whileHover={{ y: -2 }} whileTap={{ scale: 0.98 }}>
                 <Link
                   to="/signin"
-                  className="rounded-full border border-white/15 bg-white/5 px-6 py-3 text-sm font-semibold text-white transition hover:bg-white/10"
+                  className="inline-flex w-full items-center justify-center rounded-full border border-white/15 bg-white/5 px-6 py-3 text-sm font-semibold text-white transition hover:bg-white/10 sm:w-auto"
                 >
                   Sign In
                 </Link>
@@ -217,7 +217,7 @@ const Home = () => {
               <motion.div variants={itemVariants} whileHover={{ y: -2 }} whileTap={{ scale: 0.98 }}>
                 <Link
                   to="/signup"
-                  className="rounded-full border border-white/15 bg-white/5 px-6 py-3 text-sm font-semibold text-white transition hover:bg-white/10"
+                  className="inline-flex w-full items-center justify-center rounded-full border border-white/15 bg-white/5 px-6 py-3 text-sm font-semibold text-white transition hover:bg-white/10 sm:w-auto"
                 >
                   Create Account
                 </Link>
@@ -227,7 +227,7 @@ const Home = () => {
         </div>
       </motion.section>
 
-      <motion.section variants={sectionVariants} id="how-it-works" className="content-panel rounded-[32px] border border-white/10 p-8">
+      <motion.section variants={sectionVariants} id="how-it-works" className="content-panel rounded-[32px] border border-white/10 p-5 sm:p-8">
         <div className="grid gap-6 lg:grid-cols-[1fr_0.95fr]">
           <motion.div variants={itemVariants}>
             <h2 className="text-2xl font-semibold text-white">How It Works</h2>
@@ -249,8 +249,8 @@ const Home = () => {
             </motion.div>
           </motion.div>
 
-          <motion.div variants={itemVariants} whileHover={cardHover} className="rounded-[28px] border border-white/10 bg-white/5 p-6">
-            <p className="text-sm font-semibold uppercase tracking-[0.28em] text-amber-300">Draw Mechanics</p>
+          <motion.div variants={itemVariants} whileHover={cardHover} className="rounded-[28px] border border-white/10 bg-white/5 p-5 sm:p-6">
+            <p className="text-xs font-semibold uppercase tracking-[0.2em] text-amber-300 sm:text-sm sm:tracking-[0.28em]">Draw Mechanics</p>
             <motion.div variants={sectionVariants} className="mt-5 grid gap-4 sm:grid-cols-2">
               {drawDetails.map((item) => (
                 <motion.div
@@ -271,7 +271,7 @@ const Home = () => {
         </div>
       </motion.section>
 
-      <motion.section variants={sectionVariants} id="charities" className="content-panel rounded-[32px] border border-white/10 p-8">
+      <motion.section variants={sectionVariants} id="charities" className="content-panel rounded-[32px] border border-white/10 p-5 sm:p-8">
         <div className="grid gap-6 lg:grid-cols-[0.95fr_1.05fr]">
           <motion.div variants={itemVariants}>
             <h2 className="text-2xl font-semibold text-white">Charities</h2>

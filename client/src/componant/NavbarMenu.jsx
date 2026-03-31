@@ -154,7 +154,7 @@ const NavbarMenu = () => {
             animate="show"
             exit="exit"
             variants={menuVariants}
-            className={`theme-menu-panel menu-scrollbar absolute right-0 top-14 z-50 max-h-[70vh] w-72 overflow-y-auto rounded-[28px] border p-3 shadow-[0_30px_80px_rgba(15,23,42,0.42)] backdrop-blur-xl ${theme === 'light' ? 'border-slate-300/50' : 'border-white/10 bg-slate-950/92'}`}
+            className={`theme-menu-panel menu-scrollbar absolute right-0 top-14 z-50 max-h-[70vh] w-[min(18rem,calc(100vw-1.5rem))] max-w-[18rem] overflow-y-auto rounded-[28px] border p-3 shadow-[0_30px_80px_rgba(15,23,42,0.42)] backdrop-blur-xl ${theme === 'light' ? 'border-slate-300/50' : 'border-white/10 bg-slate-950/92'}`}
           >
             <div className={`menu-panel rounded-[22px] border p-4 ${theme === 'light' ? 'border-slate-200/80' : 'border-white/5'}`}>
               {(currentUser || currentAdmin) ? (

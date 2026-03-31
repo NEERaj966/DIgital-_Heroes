@@ -62,29 +62,29 @@ const Subscription = () => {
       variants={sectionVariants}
       className="space-y-8"
     >
-      <section className="hero-panel overflow-hidden rounded-[36px] border border-white/10 px-6 py-12 shadow-[0_30px_100px_rgba(15,23,42,0.45)] sm:px-10 sm:py-16">
+      <section className="hero-panel overflow-hidden rounded-[28px] border border-white/10 px-5 py-10 shadow-[0_30px_100px_rgba(15,23,42,0.45)] sm:rounded-[36px] sm:px-10 sm:py-16">
         <div className="grid gap-10 lg:grid-cols-[1.2fr_0.8fr] lg:items-end">
           <div>
-            <p className="mb-4 text-sm font-semibold uppercase tracking-[0.35em] text-amber-300">
+            <p className="mb-4 text-xs font-semibold uppercase tracking-[0.24em] text-amber-300 sm:text-sm sm:tracking-[0.35em]">
               Subscription Plans
             </p>
-            <h1 className="max-w-3xl text-4xl font-semibold leading-tight text-white sm:text-5xl">
+            <h1 className="max-w-3xl text-3xl font-semibold leading-tight text-white sm:text-5xl">
               Choose your subscription before creating a user account.
             </h1>
-            <p className="mt-6 max-w-2xl text-base leading-8 text-slate-300 sm:text-lg">
+            <p className="mt-6 max-w-2xl text-sm leading-7 text-slate-300 sm:text-lg sm:leading-8">
               Only subscribed users can sign in and use current user features, so pick the plan that fits you first.
             </p>
 
-            <div className="mt-8 flex flex-wrap gap-3">
+            <div className="mt-8 flex flex-col gap-3 sm:flex-row sm:flex-wrap">
               <Link
                 to={`/signup?plan=${selectedPlan}`}
-                className="inline-flex items-center justify-center rounded-full bg-gradient-to-r from-amber-300 via-orange-400 to-rose-500 px-6 py-3 text-sm font-semibold text-slate-950 shadow-[0_18px_36px_rgba(249,115,22,0.28)]"
+                className="inline-flex w-full items-center justify-center rounded-full bg-gradient-to-r from-amber-300 via-orange-400 to-rose-500 px-6 py-3 text-sm font-semibold text-slate-950 shadow-[0_18px_36px_rgba(249,115,22,0.28)] sm:w-auto"
               >
                 Start Membership
               </Link>
               <Link
                 to="/signin"
-                className="inline-flex items-center justify-center rounded-full border border-white/15 bg-white/5 px-6 py-3 text-sm font-semibold text-white backdrop-blur-md transition hover:bg-white/10"
+                className="inline-flex w-full items-center justify-center rounded-full border border-white/15 bg-white/5 px-6 py-3 text-sm font-semibold text-white backdrop-blur-md transition hover:bg-white/10 sm:w-auto"
               >
                 Sign In
               </Link>
@@ -92,7 +92,7 @@ const Subscription = () => {
           </div>
 
           <div className="content-panel rounded-[32px] border border-white/10 p-6">
-            <p className="text-xs font-semibold uppercase tracking-[0.32em] text-slate-400">
+            <p className="text-xs font-semibold uppercase tracking-[0.24em] text-slate-400 sm:tracking-[0.32em]">
               Included With Every Plan
             </p>
             <div className="mt-5 space-y-3">
@@ -116,10 +116,10 @@ const Subscription = () => {
       >
         <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
           <div>
-            <p className="text-sm font-semibold uppercase tracking-[0.28em] text-amber-300">
+            <p className="text-xs font-semibold uppercase tracking-[0.2em] text-amber-300 sm:text-sm sm:tracking-[0.28em]">
               Plans
             </p>
-            <h2 className="mt-2 text-3xl font-semibold text-white">Flexible pricing for every kind of supporter</h2>
+            <h2 className="mt-2 text-2xl font-semibold text-white sm:text-3xl">Flexible pricing for every kind of supporter</h2>
           </div>
           <p className="max-w-xl text-sm leading-7 text-slate-300">
             Pick one regular monthly plan, one popular monthly plan, or one yearly plan before continuing.
@@ -136,9 +136,9 @@ const Subscription = () => {
                 type="button"
                 variants={itemVariants}
                 onClick={() => setSelectedPlan(plan.code)}
-                className={`text-left rounded-[30px] border bg-slate-950/50 p-6 transition ${getPlanStateClasses(plan.code, isSelected)}`}
+                className={`text-left rounded-[30px] border bg-slate-950/50 p-5 sm:p-6 transition ${getPlanStateClasses(plan.code, isSelected)}`}
               >
-                <div className="flex items-center justify-between gap-4">
+                <div className="flex flex-col items-start gap-3 sm:flex-row sm:items-center sm:justify-between">
                   <p className="text-xl font-semibold text-white">{plan.name}</p>
                   <span
                     className={`rounded-full px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.22em] ${
@@ -152,7 +152,7 @@ const Subscription = () => {
                 </div>
 
                 <div className="mt-5 flex items-end gap-1">
-                  <span className="text-4xl font-semibold text-white">{plan.price}</span>
+                  <span className="text-3xl font-semibold text-white sm:text-4xl">{plan.price}</span>
                   <span className="pb-1 text-sm text-slate-400">{plan.billingLabel}</span>
                 </div>
 
@@ -177,10 +177,10 @@ const Subscription = () => {
         className="grid gap-6 lg:grid-cols-[0.9fr_1.1fr]"
       >
         <div className="content-panel rounded-[32px] border border-white/10 p-6 sm:p-8">
-          <p className="text-sm font-semibold uppercase tracking-[0.28em] text-amber-300">
+          <p className="text-xs font-semibold uppercase tracking-[0.2em] text-amber-300 sm:text-sm sm:tracking-[0.28em]">
             Selected Plan
           </p>
-          <h2 className="mt-3 text-3xl font-semibold text-white">
+          <h2 className="mt-3 text-2xl font-semibold text-white sm:text-3xl">
             {SUBSCRIPTION_PLANS.find((plan) => plan.code === selectedPlan)?.name}
           </h2>
           <p className="mt-4 text-sm leading-7 text-slate-300">
@@ -190,13 +190,13 @@ const Subscription = () => {
           <div className="mt-8 flex flex-col gap-3">
             <Link
               to={`/signup?plan=${selectedPlan}`}
-              className="inline-flex items-center justify-center rounded-full bg-gradient-to-r from-amber-300 via-orange-400 to-rose-500 px-6 py-3 text-sm font-semibold text-slate-950 shadow-[0_18px_36px_rgba(249,115,22,0.28)]"
+              className="inline-flex w-full items-center justify-center rounded-full bg-gradient-to-r from-amber-300 via-orange-400 to-rose-500 px-6 py-3 text-sm font-semibold text-slate-950 shadow-[0_18px_36px_rgba(249,115,22,0.28)] sm:w-auto"
             >
               Continue to Sign Up
             </Link>
             <Link
               to="/"
-              className="inline-flex items-center justify-center rounded-full border border-white/15 bg-white/5 px-6 py-3 text-sm font-semibold text-white transition hover:bg-white/10"
+              className="inline-flex w-full items-center justify-center rounded-full border border-white/15 bg-white/5 px-6 py-3 text-sm font-semibold text-white transition hover:bg-white/10 sm:w-auto"
             >
               Back to Home
             </Link>
@@ -204,7 +204,7 @@ const Subscription = () => {
         </div>
 
         <div className="content-panel rounded-[32px] border border-white/10 p-6 sm:p-8">
-          <p className="text-sm font-semibold uppercase tracking-[0.28em] text-amber-300">
+          <p className="text-xs font-semibold uppercase tracking-[0.2em] text-amber-300 sm:text-sm sm:tracking-[0.28em]">
             Why Subscribe
           </p>
           <div className="mt-5 grid gap-4 sm:grid-cols-2">

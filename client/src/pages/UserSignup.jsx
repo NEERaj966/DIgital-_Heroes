@@ -315,25 +315,25 @@ const UserSignup = () => {
       whileInView="show"
       viewport={{ once: true, amount: 0.2 }}
       variants={cardVariants}
-      className="auth-card relative overflow-hidden rounded-[34px] border border-white/10 p-8 sm:p-10"
+      className="auth-card relative overflow-hidden rounded-[34px] border border-white/10 p-5 sm:p-8 sm:py-10"
     >
       <div className="absolute inset-x-0 top-0 h-px bg-gradient-to-r from-transparent via-amber-300/80 to-transparent" />
 
       <div className="mb-8 max-w-xl">
-        <p className="mb-3 text-sm font-semibold uppercase tracking-[0.35em] text-amber-300">
+        <p className="mb-3 text-xs font-semibold uppercase tracking-[0.24em] text-amber-300 sm:text-sm sm:tracking-[0.35em]">
           User Sign Up
         </p>
-        <h2 className="text-3xl font-semibold leading-tight text-white sm:text-4xl">
+        <h2 className="text-2xl font-semibold leading-tight text-white sm:text-4xl">
           Create your player account and start making every round count.
         </h2>
-        <p className="mt-4 text-base leading-8 text-slate-300">
+        <p className="mt-4 text-sm leading-7 text-slate-300 sm:text-base sm:leading-8">
           Choose a subscription, complete the Razorpay payment, and create your subscriber account with email/password or Google.
         </p>
       </div>
 
       <form onSubmit={handleSubmit} className="grid gap-4 md:grid-cols-2">
         <div className="md:col-span-2 rounded-[28px] border border-amber-300/20 bg-amber-300/10 p-5">
-          <p className="text-xs font-semibold uppercase tracking-[0.32em] text-amber-200">
+          <p className="text-xs font-semibold uppercase tracking-[0.24em] text-amber-200 sm:tracking-[0.32em]">
             Subscription Required
           </p>
           <p className="mt-3 text-sm leading-7 text-slate-200">
@@ -354,7 +354,7 @@ const UserSignup = () => {
                   whileHover={{ y: -2 }}
                   whileTap={{ scale: 0.99 }}
                   onClick={() => handlePlanSelect(plan.code)}
-                  className={`rounded-[28px] border p-5 text-left transition ${
+                  className={`rounded-[28px] border p-4 text-left transition sm:p-5 ${
                     isSelected
                       ? plan.code === 'popular-monthly'
                         ? 'border-amber-300/50 bg-amber-300/10 shadow-[0_20px_50px_rgba(249,115,22,0.16)]'
@@ -364,7 +364,7 @@ const UserSignup = () => {
                       : 'border-white/10 bg-white/5 hover:border-white/20 hover:bg-white/10'
                   }`}
                 >
-                  <div className="flex items-center justify-between gap-3">
+                  <div className="flex flex-col items-start gap-3 sm:flex-row sm:items-center sm:justify-between">
                     <p className="text-lg font-semibold text-white">{plan.name}</p>
                     <span
                       className={`rounded-full px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.2em] ${
@@ -375,7 +375,7 @@ const UserSignup = () => {
                     </span>
                   </div>
                   <div className="mt-4 flex items-end gap-1">
-                    <span className="text-3xl font-semibold text-white">{plan.price}</span>
+                    <span className="text-2xl font-semibold text-white sm:text-3xl">{plan.price}</span>
                     <span className="pb-1 text-sm text-slate-400">{plan.billingLabel}</span>
                   </div>
                   <p className="mt-3 text-sm leading-7 text-slate-300">{plan.description}</p>
@@ -412,7 +412,7 @@ const UserSignup = () => {
             name="avatar"
             onChange={handleChange}
             accept="image/png,image/jpeg,image/webp"
-            className="w-full rounded-2xl border border-dashed border-white/15 bg-white/5 px-4 py-3 text-sm text-slate-300 file:mr-4 file:rounded-full file:border-0 file:bg-amber-300 file:px-4 file:py-2 file:font-semibold file:text-slate-950"
+            className="w-full rounded-2xl border border-dashed border-white/15 bg-white/5 px-4 py-3 text-sm text-slate-300 file:mb-2 file:mr-4 file:rounded-full file:border-0 file:bg-amber-300 file:px-4 file:py-2 file:font-semibold file:text-slate-950 sm:file:mb-0"
           />
         </motion.div>
 
@@ -447,7 +447,7 @@ const UserSignup = () => {
             whileHover={{ y: -3, scale: 1.01 }}
             whileTap={{ scale: 0.98 }}
             disabled={state.loading}
-            className="inline-flex items-center justify-center rounded-full bg-gradient-to-r from-amber-300 via-orange-400 to-rose-500 px-6 py-3 text-sm font-semibold text-slate-950 shadow-[0_18px_36px_rgba(249,115,22,0.28)]"
+            className="inline-flex w-full items-center justify-center rounded-full bg-gradient-to-r from-amber-300 via-orange-400 to-rose-500 px-6 py-3 text-sm font-semibold text-slate-950 shadow-[0_18px_36px_rgba(249,115,22,0.28)] sm:w-auto"
           >
             {state.loading ? 'Processing Payment...' : 'Pay & Create Account'}
           </motion.button>

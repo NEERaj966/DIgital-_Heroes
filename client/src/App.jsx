@@ -43,7 +43,7 @@ export const App = () => {
     >
       <Navbar />
 
-      <main className="mx-auto flex max-w-7xl flex-col gap-8 px-4 pb-20 pt-10 sm:px-6 lg:px-8">
+      <main className="mx-auto flex max-w-7xl flex-col gap-6 px-3 pb-16 pt-6 sm:gap-8 sm:px-6 sm:pb-20 sm:pt-10 lg:px-8">
         <Suspense
           fallback={
             <div className="rounded-[28px] border border-white/10 bg-white/5 px-6 py-10 text-center text-sm font-medium text-slate-300">

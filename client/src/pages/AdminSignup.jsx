@@ -200,16 +200,16 @@ const AdminSignup = () => {
       whileInView="show"
       viewport={{ once: true, amount: 0.2 }}
       variants={cardVariants}
-      className="auth-card rounded-[34px] border border-white/10 p-8 sm:p-10"
+      className="auth-card rounded-[34px] border border-white/10 p-5 sm:p-8 sm:py-10"
     >
       <div className="mb-8 max-w-xl">
-        <p className="mb-3 text-sm font-semibold uppercase tracking-[0.35em] text-amber-300">
+        <p className="mb-3 text-xs font-semibold uppercase tracking-[0.24em] text-amber-300 sm:text-sm sm:tracking-[0.35em]">
           Admin Sign Up
         </p>
-        <h2 className="text-3xl font-semibold leading-tight text-white sm:text-4xl">
+        <h2 className="text-2xl font-semibold leading-tight text-white sm:text-4xl">
           Create an administrator account with platform permissions.
         </h2>
-        <p className="mt-4 text-base leading-8 text-slate-300">
+        <p className="mt-4 text-sm leading-7 text-slate-300 sm:text-base sm:leading-8">
           Set up the admin profile, upload the avatar, and choose which permissions should be active from day one.
         </p>
       </div>
@@ -242,7 +242,7 @@ const AdminSignup = () => {
             name="avatar"
             onChange={handleChange}
             accept="image/png,image/jpeg,image/webp"
-            className="w-full rounded-2xl border border-dashed border-white/15 bg-white/5 px-4 py-3 text-sm text-slate-300 file:mr-4 file:rounded-full file:border-0 file:bg-amber-300 file:px-4 file:py-2 file:font-semibold file:text-slate-950"
+            className="w-full rounded-2xl border border-dashed border-white/15 bg-white/5 px-4 py-3 text-sm text-slate-300 file:mb-2 file:mr-4 file:rounded-full file:border-0 file:bg-amber-300 file:px-4 file:py-2 file:font-semibold file:text-slate-950 sm:file:mb-0"
           />
         </motion.div>
 
@@ -290,7 +290,7 @@ const AdminSignup = () => {
             whileHover={{ y: -3, scale: 1.01 }}
             whileTap={{ scale: 0.98 }}
             disabled={state.loading}
-            className="inline-flex items-center justify-center rounded-full bg-gradient-to-r from-amber-300 via-orange-400 to-rose-500 px-6 py-3 text-sm font-semibold text-slate-950 shadow-[0_18px_36px_rgba(249,115,22,0.28)]"
+            className="inline-flex w-full items-center justify-center rounded-full bg-gradient-to-r from-amber-300 via-orange-400 to-rose-500 px-6 py-3 text-sm font-semibold text-slate-950 shadow-[0_18px_36px_rgba(249,115,22,0.28)] sm:w-auto"
           >
             {state.loading ? 'Creating...' : 'Create Admin Account'}
           </motion.button>
