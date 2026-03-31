@@ -1,6 +1,4 @@
 import dotenv from 'dotenv'
-import connectDB from './DB/index.js'
-import { app } from './app.js'
 import { fileURLToPath } from 'url'
 
 const envPath = fileURLToPath(new URL('../.env', import.meta.url))
@@ -9,14 +7,20 @@ dotenv.config({
     path: envPath
 })
 
+const [{ default: connectDB }, { app }] = await Promise.all([
+    import('./DB/index.js'),
+    import('./app.js')
+])
 
-connectDB()
-.then(() => {
-    const port = process.env.PORT || 8000
+try {
+    await connectDB()
+
+    const port = Number(process.env.PORT) || 8000
+
     app.listen(port, () => {
-        console.log(`⚙️ Server is running at port : ${port}`);
+        console.log(`Server is running at port: ${port}`)
     })
-})
-.catch((err) => {
-    console.log("MONGO db connection failed !!! ", err);
-})
+} catch (err) {
+    console.error("MongoDB connection failed during startup:", err.message)
+    process.exit(1)
+}

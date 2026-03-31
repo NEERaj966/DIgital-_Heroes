@@ -6,10 +6,10 @@ import { ApiResponse } from './utils/Apiresponse.js'
 
 
 const app = express();
-const corsOrigin = process.env.CORS_ORIGIN === "*" ? true : process.env.CORS_ORIGIN
+const corsOrigin = String(process.env.CORS_ORIGIN || '').trim()
 
 app.use(cors({
-    origin: corsOrigin,
+    origin: corsOrigin === "*" ? true : (corsOrigin || true),
     credentials: true
 }))
 
