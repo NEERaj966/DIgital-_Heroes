@@ -69,6 +69,9 @@ Use `client/.env.example` as template.
 ### Notes
 - Frontend must point to deployed backend URL.
 - Backend `CORS_ORIGIN` must include deployed frontend domain.
+- For Vercel deployments with `react-router-dom` and `BrowserRouter`, add a SPA rewrite so direct visits and Stripe returns to routes like `/signup` or `/profile` do not return `404: NOT_FOUND`.
+- This repo includes `client/vercel.json` for that rewrite. If the Vercel project root is not `client/`, place the same config in the deployed root directory instead.
+- Stripe success and cancel URLs should use the deployed frontend origin, for example `https://your-frontend.vercel.app/signup?checkout=success&session_id=...`.
 
 ## 4. Post-Deployment Checklist
 - Open backend health URL and confirm HTTP 200.
