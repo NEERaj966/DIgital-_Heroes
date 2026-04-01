@@ -1,11 +1,8 @@
 import { randomUUID } from "node:crypto";
+import Stripe from "stripe";
 
-const STRIPE_API_BASE_URL = "https://api.stripe.com";
-const STRIPE_PAYOUTS_API_VERSION = "2026-03-25.preview";
 const DEFAULT_REQUEST_TIMEOUT_MS = 15000;
 const REFERENCE_ID_MAX_LENGTH = 40;
-const TERMINAL_PAYOUT_STATUSES = ["posted", "failed", "returned", "canceled"];
-const IN_FLIGHT_PAYOUT_STATUSES = ["created", "pending", "processing", "submitted"];
 const ZERO_DECIMAL_CURRENCIES = new Set([
     "bif",
     "clp",
@@ -25,13 +22,14 @@ const ZERO_DECIMAL_CURRENCIES = new Set([
     "xpf"
 ]);
 
+let stripeClient;
+
 const trimValue = (value) => String(value || "").trim();
 const normalizeFlagValue = (value) => trimValue(value).toLowerCase();
 
 const getStripeSecretKey = () => trimValue(process.env.STRIPE_SECRET_KEY);
-const getStripePayoutFinancialAccountId = () => trimValue(process.env.STRIPE_PAYOUT_FINANCIAL_ACCOUNT_ID);
-const getStripePayoutRecipientCountry = () => trimValue(process.env.STRIPE_PAYOUT_RECIPIENT_COUNTRY || "IN").toUpperCase();
-const getStripePayoutCurrency = () => trimValue(process.env.STRIPE_PAYOUT_CURRENCY || "INR").toLowerCase();
+const getStripePayoutRecipientCountry = () => trimValue(process.env.STRIPE_PAYOUT_RECIPIENT_COUNTRY || "US").toUpperCase();
+const getStripePayoutCurrency = () => trimValue(process.env.STRIPE_PAYOUT_CURRENCY || "USD").toLowerCase();
 const getStripePayoutsEnabled = () => !["0", "false", "off", "disabled"].includes(normalizeFlagValue(process.env.STRIPE_PAYOUTS_ENABLED || "true"));
 
 const getRequestTimeoutMs = () => {
@@ -39,110 +37,20 @@ const getRequestTimeoutMs = () => {
     return Number.isFinite(timeoutFromEnv) && timeoutFromEnv >= 1000 ? timeoutFromEnv : DEFAULT_REQUEST_TIMEOUT_MS;
 };
 
-const appendSearchParams = (url, searchParams = {}) => {
-    Object.entries(searchParams).forEach(([key, value]) => {
-        if (value === undefined || value === null || value === "") {
-            return;
+const getStripeClient = () => {
+    if (!stripeClient) {
+        const secretKey = getStripeSecretKey();
+
+        if (!secretKey) {
+            throw new Error("Stripe secret key is not configured. Set STRIPE_SECRET_KEY in server/.env.");
         }
 
-        if (Array.isArray(value)) {
-            value.forEach((item) => {
-                if (item !== undefined && item !== null && item !== "") {
-                    url.searchParams.append(key, String(item));
-                }
-            });
-            return;
-        }
-
-        url.searchParams.append(key, String(value));
-    });
-};
-
-const extractStripeErrorMessage = (payload, status) => {
-    const message =
-        payload?.error?.message ||
-        payload?.error?.reason ||
-        payload?.message ||
-        payload?.errors?.[0]?.message ||
-        `Stripe payout request failed with status ${status}`;
-
-    if (/global payouts|public preview|preview feature/i.test(message)) {
-        return "Stripe Global Payouts is not enabled for this Stripe account yet. Enable the feature in Stripe before sending winner payouts.";
-    }
-
-    if (/financial_account/i.test(message) && /missing|invalid|required/i.test(message)) {
-        return "Stripe payout source account is missing. Set STRIPE_PAYOUT_FINANCIAL_ACCOUNT_ID in server/.env.";
-    }
-
-    if (/requested url was not found/i.test(message)) {
-        return "Stripe Global Payouts API is not available for this Stripe account yet.";
-    }
-
-    return message;
-};
-
-const stripeRequest = async (path, { method = "GET", body, searchParams, contextId, idempotencyKey } = {}) => {
-    const secretKey = getStripeSecretKey();
-
-    if (!secretKey) {
-        throw new Error("Stripe secret key is not configured. Set STRIPE_SECRET_KEY in server/.env.");
-    }
-
-    const url = new URL(path, STRIPE_API_BASE_URL);
-    appendSearchParams(url, searchParams);
-
-    const headers = {
-        Authorization: `Bearer ${secretKey}`,
-        "Stripe-Version": STRIPE_PAYOUTS_API_VERSION
-    };
-
-    if (body) {
-        headers["Content-Type"] = "application/json";
-    }
-
-    if (contextId) {
-        headers["Stripe-Context"] = contextId;
-    }
-
-    if (idempotencyKey) {
-        headers["Idempotency-Key"] = idempotencyKey;
-    }
-
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), getRequestTimeoutMs());
-
-    try {
-        const response = await fetch(url, {
-            method,
-            headers,
-            body: body ? JSON.stringify(body) : undefined,
-            signal: controller.signal
+        stripeClient = new Stripe(secretKey, {
+            timeout: getRequestTimeoutMs()
         });
-
-        const contentType = String(response.headers.get("content-type") || "");
-        const payload = contentType.includes("application/json")
-            ? await response.json().catch(() => null)
-            : await response.text().catch(() => "");
-
-        if (!response.ok) {
-            const error = new Error(extractStripeErrorMessage(payload, response.status));
-            error.statusCode = response.status;
-            error.payload = payload;
-            throw error;
-        }
-
-        return payload;
-    } catch (error) {
-        if (error?.name === "AbortError") {
-            const timeoutError = new Error("Stripe payout request timed out. Please try again.");
-            timeoutError.statusCode = 504;
-            throw timeoutError;
-        }
-
-        throw error;
-    } finally {
-        clearTimeout(timeout);
     }
+
+    return stripeClient;
 };
 
 const getCurrencyExponent = (currency) => (ZERO_DECIMAL_CURRENCIES.has(trimValue(currency).toLowerCase()) ? 0 : 2);
@@ -178,158 +86,119 @@ const toDate = (value) => {
     return Number.isNaN(parsedDate.getTime()) ? undefined : parsedDate;
 };
 
-const getRecipientCapabilityStatus = (recipientAccount) =>
-    recipientAccount?.configuration?.recipient?.capabilities?.bank_accounts?.local?.status ||
-    recipientAccount?.configuration?.recipient?.capabilities?.bank_accounts?.wire?.status ||
-    recipientAccount?.configuration?.recipient?.capabilities?.bank_accounts?.local ||
-    recipientAccount?.configuration?.recipient?.capabilities?.bank_accounts?.wire ||
-    "";
+const extractStripeErrorMessage = (error) => {
+    const rawMessage =
+        error?.raw?.message ||
+        error?.message ||
+        "Unable to process the Stripe winner payout right now.";
+    const message = trimValue(rawMessage);
 
-const getRecipientRequirements = (recipientAccount) => recipientAccount?.requirements?.currently_due || [];
-
-const isRecipientReadyForPayout = (recipientAccount) =>
-    Boolean(
-        trimValue(recipientAccount?.configuration?.recipient?.default_outbound_destination) &&
-        ["active", "enabled"].includes(trimValue(getRecipientCapabilityStatus(recipientAccount)).toLowerCase()) &&
-        !getRecipientRequirements(recipientAccount).length
-    );
-
-const createRecipientAccount = async ({ email, displayName, country }) =>
-    stripeRequest("/v2/core/accounts", {
-        method: "POST",
-        body: {
-            contact_email: email,
-            display_name: displayName,
-            identity: {
-                country,
-                entity_type: "individual"
-            },
-            configuration: {
-                recipient: {
-                    capabilities: {
-                        bank_accounts: {
-                            local: {
-                                requested: true
-                            }
-                        }
-                    }
-                }
-            },
-            include: ["configuration.recipient", "requirements", "identity"]
-        }
-    });
-
-const fetchRecipientAccount = async (recipientId) =>
-    stripeRequest(`/v2/core/accounts/${recipientId}`, {
-        searchParams: {
-            include: ["configuration.recipient", "requirements", "identity"]
-        }
-    });
-
-const createRecipientOnboardingLink = async ({ recipientId, refreshUrl, returnUrl, isUpdate }) =>
-    stripeRequest("/v2/core/account_links", {
-        method: "POST",
-        body: {
-            account: recipientId,
-            use_case: isUpdate
-                ? {
-                    type: "account_update",
-                    account_update: {
-                        configurations: ["recipient"],
-                        refresh_url: refreshUrl,
-                        return_url: returnUrl
-                    }
-                }
-                : {
-                    type: "account_onboarding",
-                    account_onboarding: {
-                        configurations: ["recipient"],
-                        refresh_url: refreshUrl,
-                        return_url: returnUrl
-                    }
-                }
-        }
-    });
-
-const createOutboundPayment = async ({ recipientId, amountInMinorUnits, currency, referenceId, description }) => {
-    const financialAccountId = getStripePayoutFinancialAccountId();
-
-    if (!financialAccountId) {
-        throw new Error("Stripe payout source account is missing. Set STRIPE_PAYOUT_FINANCIAL_ACCOUNT_ID in server/.env.");
+    if (/insufficient|not enough available balance|balance/i.test(message)) {
+        return "The platform Stripe balance is too low to transfer this winner prize right now.";
     }
 
-    return stripeRequest("/v2/money_management/outbound_payments", {
-        method: "POST",
-        idempotencyKey: randomUUID(),
-        body: {
-            from: {
-                financial_account: financialAccountId,
-                currency
-            },
-            to: {
-                recipient: recipientId
-            },
-            amount: {
-                value: amountInMinorUnits,
-                currency
-            },
-            description,
-            metadata: {
-                referenceId
+    if (/destination|connected account|account_invalid/i.test(message)) {
+        return "The winner Stripe connected account is invalid or cannot receive transfers yet.";
+    }
+
+    if (/capabilit|onboard|requirements|details_submitted|payouts_enabled/i.test(message)) {
+        return "The winner must finish Stripe Connect onboarding before receiving prize transfers.";
+    }
+
+    return message;
+};
+
+const getConnectedAccountRequirements = (connectedAccount) => connectedAccount?.requirements?.currently_due || [];
+
+const isConnectedAccountReadyForTransfers = (connectedAccount) =>
+    Boolean(
+        connectedAccount?.details_submitted &&
+        connectedAccount?.payouts_enabled &&
+        trimValue(connectedAccount?.capabilities?.transfers).toLowerCase() === "active" &&
+        !getConnectedAccountRequirements(connectedAccount).length
+    );
+
+const createConnectedAccount = async ({ email, displayName, country }) => {
+    const stripe = getStripeClient();
+
+    return stripe.accounts.create({
+        type: "express",
+        country,
+        email,
+        business_type: "individual",
+        capabilities: {
+            transfers: {
+                requested: true
             }
+        },
+        metadata: {
+            beneficiaryName: displayName
         }
     });
 };
 
-const fetchOutboundPayment = async (payoutId) => stripeRequest(`/v2/money_management/outbound_payments/${payoutId}`);
+const fetchConnectedAccount = async (accountId) => {
+    const stripe = getStripeClient();
+    return stripe.accounts.retrieve(accountId);
+};
 
-const buildFailureReason = (payload, existingState = {}) =>
-    trimValue(
-        payload?.failure?.reason ||
-        payload?.failure_reason ||
-        payload?.return_details?.reason ||
-        payload?.cancellation_details?.reason ||
-        payload?.last_error?.message ||
-        existingState.failureReason
-    );
+const createConnectedAccountLink = async ({ accountId, refreshUrl, returnUrl, isUpdate }) => {
+    const stripe = getStripeClient();
 
-const mapRemotePayoutToUserState = (payload, existingState = {}) => {
-    const payoutCurrency = trimValue(payload?.amount?.currency || existingState.currency || getStripePayoutCurrency()).toUpperCase();
-    const amountValue =
-        payload?.amount?.value ??
-        payload?.amount_value ??
-        toMinorUnits(existingState.amount || 0, payoutCurrency);
-    const status = trimValue(payload?.status || existingState.status).toLowerCase();
+    return stripe.accountLinks.create({
+        account: accountId,
+        refresh_url: refreshUrl,
+        return_url: returnUrl,
+        type: isUpdate ? "account_update" : "account_onboarding"
+    });
+};
+
+const fetchTransfer = async (transferId) => {
+    const stripe = getStripeClient();
+    return stripe.transfers.retrieve(transferId);
+};
+
+export const transferPrizeToWinner = async (winnerStripeAccountId, amount) => {
+    const stripe = getStripeClient();
+
+    // Stripe transfers move funds from the platform balance to the winner's connected account.
+    return stripe.transfers.create({
+        amount,
+        currency: getStripePayoutCurrency(),
+        destination: trimValue(winnerStripeAccountId)
+    });
+};
+
+const mapTransferToUserState = (transfer, existingState = {}) => {
+    const payoutCurrency = trimValue(transfer?.currency || existingState.currency || getStripePayoutCurrency()).toUpperCase();
+    const amountValue = transfer?.amount ?? toMinorUnits(existingState.amount || 0, payoutCurrency);
+    const fullyReversed =
+        Boolean(transfer?.reversed) ||
+        (
+            Number.isFinite(Number(transfer?.amount_reversed)) &&
+            Number(transfer?.amount_reversed) >= Number(transfer?.amount || 0) &&
+            Number(transfer?.amount || 0) > 0
+        );
 
     return {
         provider: "stripe",
-        payoutId: payload?.id || existingState.payoutId,
+        payoutId: transfer?.id || existingState.payoutId,
         amount: fromMinorUnits(amountValue, payoutCurrency),
         currency: payoutCurrency,
-        mode: "STRIPE_GLOBAL_PAYOUT",
-        status: status || existingState.status,
-        referenceId: trimValue(payload?.metadata?.referenceId || existingState.referenceId),
-        utr: trimValue(
-            payload?.tracking_details?.serial_number ||
-            payload?.tracking_details?.tracking_number ||
-            existingState.utr
-        ),
-        initiatedAt: toDate(payload?.created) || toDate(payload?.created_at) || toDate(existingState.initiatedAt) || new Date(),
-        processedAt:
-            status === "posted"
-                ? toDate(payload?.posted_at) || toDate(payload?.updated_at) || toDate(existingState.processedAt) || new Date()
-                : toDate(existingState.processedAt),
-        failureReason: buildFailureReason(payload, existingState),
-        recipientId: trimValue(payload?.to?.recipient || existingState.recipientId),
+        mode: "STRIPE_CONNECT_TRANSFER",
+        status: fullyReversed ? "reversed" : "paid",
+        referenceId: trimValue(existingState.referenceId),
+        utr: trimValue(transfer?.balance_transaction || existingState.utr),
+        initiatedAt: toDate(transfer?.created) || toDate(existingState.initiatedAt) || new Date(),
+        processedAt: fullyReversed ? toDate(existingState.processedAt) : (toDate(transfer?.created) || toDate(existingState.processedAt) || new Date()),
+        failureReason: fullyReversed ? (trimValue(existingState.failureReason) || "Stripe transfer was reversed.") : "",
+        recipientId: trimValue(transfer?.destination || existingState.recipientId),
         onboardingRequired: false,
         beneficiaryName: existingState.beneficiaryName,
         phone: existingState.phone,
         vpa: existingState.vpa
     };
 };
-
-const isTerminalStatus = (status) => TERMINAL_PAYOUT_STATUSES.includes(trimValue(status).toLowerCase());
-const isPayoutInFlight = (status) => IN_FLIGHT_PAYOUT_STATUSES.includes(trimValue(status).toLowerCase());
 
 const ensureUserPayoutDetails = (user, updates = {}) => {
     user.payoutDetails = {
@@ -342,7 +211,7 @@ const ensureUserPayoutDetails = (user, updates = {}) => {
     };
 };
 
-const ensureStripeRecipient = async (user) => {
+const ensureWinnerConnectedAccount = async (user) => {
     const beneficiaryName = trimValue(user?.payoutDetails?.beneficiaryName) || trimValue(user?.name);
     const payoutEmail = normalizePayoutEmail(user?.payoutDetails?.email || user?.email);
 
@@ -354,22 +223,22 @@ const ensureStripeRecipient = async (user) => {
     }
 
     const recipientCountry = trimValue(user?.payoutDetails?.recipientCountry || getStripePayoutRecipientCountry());
-    let recipientAccount;
+    let connectedAccount;
     let createdRecipient = false;
     const existingRecipientId = trimValue(user?.payoutDetails?.stripeRecipientId);
 
     if (existingRecipientId) {
         try {
-            recipientAccount = await fetchRecipientAccount(existingRecipientId);
+            connectedAccount = await fetchConnectedAccount(existingRecipientId);
         } catch (error) {
-            if (error?.statusCode !== 404) {
+            if (error?.statusCode !== 404 && error?.code !== "resource_missing") {
                 throw error;
             }
         }
     }
 
-    if (!recipientAccount) {
-        recipientAccount = await createRecipientAccount({
+    if (!connectedAccount) {
+        connectedAccount = await createConnectedAccount({
             email: payoutEmail,
             displayName: beneficiaryName,
             country: recipientCountry
@@ -380,14 +249,14 @@ const ensureStripeRecipient = async (user) => {
     ensureUserPayoutDetails(user, {
         beneficiaryName,
         email: payoutEmail,
-        stripeRecipientId: recipientAccount.id,
+        stripeRecipientId: connectedAccount.id,
         recipientCountry
     });
 
     return {
-        ready: isRecipientReadyForPayout(recipientAccount),
+        ready: isConnectedAccountReadyForTransfers(connectedAccount),
         createdRecipient,
-        recipientAccount,
+        recipientAccount: connectedAccount,
         beneficiaryName,
         payoutEmail
     };
@@ -399,8 +268,7 @@ export const normalizePayoutEmail = (value) => trimValue(value).toLowerCase();
 
 const isWinnerPayoutSetupConfigured = () => Boolean(getStripeSecretKey()) && getStripePayoutsEnabled();
 
-export const isWinnerPayoutConfigured = () =>
-    Boolean(getStripeSecretKey() && getStripePayoutFinancialAccountId()) && getStripePayoutsEnabled();
+export const isWinnerPayoutConfigured = () => Boolean(getStripeSecretKey()) && getStripePayoutsEnabled();
 
 export const buildWinnerReferenceId = (userId, prefix = "win") => {
     const sanitizedPrefix = trimValue(prefix).replace(/[^a-z0-9_-]/gi, "").toLowerCase() || "win";
@@ -417,17 +285,18 @@ export const createWinnerPayoutSetupLink = async (user, { returnUrl, refreshUrl 
     }
 
     if (!isWinnerPayoutSetupConfigured()) {
-        throw new Error("Stripe winner payouts are not configured on the server yet.");
+        throw new Error("Stripe Connect winner payouts are not configured on the server yet.");
     }
 
-    const recipientState = await ensureStripeRecipient(user);
+    const recipientState = await ensureWinnerConnectedAccount(user);
 
     if (!recipientState.recipientAccount?.id) {
-        throw new Error(recipientState.message || "Stripe payout recipient could not be prepared.");
+        throw new Error(recipientState.message || "Stripe connected account could not be prepared.");
     }
 
-    const accountLink = await createRecipientOnboardingLink({
-        recipientId: recipientState.recipientAccount.id,
+    // Winners complete Connect onboarding first, then prize money is sent as a transfer from the platform balance.
+    const accountLink = await createConnectedAccountLink({
+        accountId: recipientState.recipientAccount.id,
         refreshUrl,
         returnUrl,
         isUpdate: !recipientState.createdRecipient
@@ -437,13 +306,13 @@ export const createWinnerPayoutSetupLink = async (user, { returnUrl, refreshUrl 
         provider: "stripe",
         amount: Number(user.totalWinnings || 0),
         currency: getStripePayoutCurrency().toUpperCase(),
-        mode: "STRIPE_GLOBAL_PAYOUT",
-        status: "action_required",
+        mode: "STRIPE_CONNECT_TRANSFER",
+        status: recipientState.ready ? "ready" : "action_required",
         referenceId: user.latestPayout?.referenceId || buildWinnerReferenceId(user._id, "setup"),
         initiatedAt: user.latestPayout?.initiatedAt || new Date(),
-        failureReason: "Complete Stripe payout setup to receive winner funds.",
+        failureReason: recipientState.ready ? "" : "Complete Stripe Connect onboarding to receive winner prize transfers.",
         recipientId: recipientState.recipientAccount.id,
-        onboardingRequired: true,
+        onboardingRequired: !recipientState.ready,
         beneficiaryName: recipientState.beneficiaryName
     };
     user.payoutStatus = Number(user.totalWinnings || 0) > 0 ? "pending" : user.payoutStatus;
@@ -453,7 +322,7 @@ export const createWinnerPayoutSetupLink = async (user, { returnUrl, refreshUrl 
         url: accountLink?.url,
         expiresAt: accountLink?.expires_at,
         recipientId: recipientState.recipientAccount.id,
-        message: "Stripe payout setup link created successfully."
+        message: "Stripe Connect onboarding link created successfully."
     };
 };
 
@@ -462,16 +331,14 @@ export const syncLatestUserPayout = async (user) => {
         return user;
     }
 
-    const currentStatus = trimValue(user.latestPayout.status).toLowerCase();
-
-    if (isTerminalStatus(currentStatus) && user.payoutStatus === "paid") {
-        return user;
-    }
-
     try {
-        const payout = await fetchOutboundPayment(user.latestPayout.payoutId);
-        const nextLatestPayout = mapRemotePayoutToUserState(payout, user.latestPayout);
-        const nextPayoutStatus = trimValue(payout?.status).toLowerCase() === "posted" ? "paid" : "pending";
+        const transfer = await fetchTransfer(user.latestPayout.payoutId);
+        const nextLatestPayout = {
+            ...mapTransferToUserState(transfer, user.latestPayout),
+            referenceId: trimValue(user.latestPayout.referenceId),
+            beneficiaryName: user.latestPayout.beneficiaryName
+        };
+        const nextPayoutStatus = trimValue(nextLatestPayout.status).toLowerCase() === "paid" ? "paid" : "pending";
         const hasChanges =
             JSON.stringify(user.latestPayout) !== JSON.stringify(nextLatestPayout) ||
             user.payoutStatus !== nextPayoutStatus;
@@ -517,35 +384,32 @@ export const attemptAutomaticWinnerPayout = async (user) => {
         return {
             attempted: false,
             sent: false,
-            message: "Stripe winner payouts are not configured on the server yet."
+            message: "Stripe Connect winner payouts are not configured on the server yet."
         };
     }
 
-    if (user.latestPayout?.payoutId && (isPayoutInFlight(user.latestPayout.status) || trimValue(user.latestPayout.status).toLowerCase() === "posted")) {
+    if (user.latestPayout?.payoutId && trimValue(user.latestPayout.status).toLowerCase() === "paid") {
         return {
             attempted: false,
-            sent: trimValue(user.latestPayout.status).toLowerCase() === "posted",
-            message:
-                trimValue(user.latestPayout.status).toLowerCase() === "posted"
-                    ? "This payout has already been processed."
-                    : `This payout is already ${user.latestPayout.status}.`
+            sent: true,
+            message: "This payout has already been processed."
         };
     }
 
-    const recipientState = await ensureStripeRecipient(user);
+    const recipientState = await ensureWinnerConnectedAccount(user);
 
     if (!recipientState.ready) {
         user.latestPayout = {
             provider: "stripe",
             amount: Number(user.totalWinnings || 0),
             currency: getStripePayoutCurrency().toUpperCase(),
-            mode: "STRIPE_GLOBAL_PAYOUT",
+            mode: "STRIPE_CONNECT_TRANSFER",
             status: "action_required",
             referenceId: user.latestPayout?.referenceId || buildWinnerReferenceId(user._id, "setup"),
             initiatedAt: user.latestPayout?.initiatedAt || new Date(),
             failureReason:
                 recipientState.message ||
-                "Stripe payout setup is incomplete. Ask the winner to open Profile Settings or Winnings and finish Stripe payout onboarding.",
+                "Stripe Connect onboarding is incomplete. Ask the winner to finish Stripe account setup first.",
             recipientId: recipientState.recipientAccount?.id,
             onboardingRequired: true,
             beneficiaryName: recipientState.beneficiaryName
@@ -558,7 +422,7 @@ export const attemptAutomaticWinnerPayout = async (user) => {
             sent: false,
             message:
                 recipientState.message ||
-                "Stripe payout setup is incomplete. Ask the winner to finish Stripe payout onboarding first."
+                "Stripe Connect onboarding is incomplete. Ask the winner to finish Stripe account setup first."
         };
     }
 
@@ -576,39 +440,30 @@ export const attemptAutomaticWinnerPayout = async (user) => {
     const referenceId = buildWinnerReferenceId(user._id, "win");
 
     try {
-        const payout = await createOutboundPayment({
-            recipientId: recipientState.recipientAccount.id,
-            amountInMinorUnits,
-            currency: payoutCurrency,
-            referenceId,
-            description: `Winner prize for ${trimValue(user.name) || trimValue(user.email) || "player"}`
-        });
+        const transfer = await transferPrizeToWinner(recipientState.recipientAccount.id, amountInMinorUnits);
 
         user.latestPayout = {
-            ...mapRemotePayoutToUserState(payout, user.latestPayout),
+            ...mapTransferToUserState(transfer, user.latestPayout),
             referenceId,
             beneficiaryName: recipientState.beneficiaryName,
             recipientId: recipientState.recipientAccount.id
         };
-        user.payoutStatus = trimValue(payout?.status).toLowerCase() === "posted" ? "paid" : "pending";
+        user.payoutStatus = "paid";
         await user.save();
 
-        const isPaid = trimValue(payout?.status).toLowerCase() === "posted";
         return {
             attempted: true,
-            sent: isPaid,
-            message: isPaid
-                ? "Winner payout processed successfully through Stripe."
-                : `Winner payout started successfully through Stripe and is currently ${payout?.status || "processing"}.`
+            sent: true,
+            message: "Winner prize transferred successfully to the Stripe connected account."
         };
     } catch (error) {
-        const failureMessage = error?.message || "Unable to send the winner payout automatically through Stripe.";
+        const failureMessage = extractStripeErrorMessage(error);
 
         user.latestPayout = {
             provider: "stripe",
             amount: Number(user.totalWinnings || 0),
             currency: payoutCurrency.toUpperCase(),
-            mode: "STRIPE_GLOBAL_PAYOUT",
+            mode: "STRIPE_CONNECT_TRANSFER",
             status: "failed",
             referenceId,
             initiatedAt: new Date(),
